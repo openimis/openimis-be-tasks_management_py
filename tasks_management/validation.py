@@ -6,10 +6,6 @@ from core.validation import BaseModelValidation
 from tasks_management.models import TaskGroup, TaskExecutor, Task
 
 
-class TaskValidation(BaseModelValidation):
-    OBJECT_TYPE = Task
-
-
 class TaskGroupValidation(BaseModelValidation):
     OBJECT_TYPE = TaskGroup
 
@@ -37,6 +33,18 @@ class TaskExecutorValidation(BaseModelValidation):
         if errors:
             raise ValidationError(errors)
         super().validate_create(user, **data)
+
+
+class TaskValidation(BaseModelValidation):
+    OBJECT_TYPE = Task
+
+    @classmethod
+    def validate_update(cls, user, **data):
+        uuid = data.get('uuid', None)
+        instance = Task.objects.filter(id=uuid).first()
+        instance_status = instance.status
+        if instance_status == Task.Status.COMPLETED:
+            raise ValidationError(_("tasks_management.validation.task.updating_completed_task"))
 
 
 def validate_task_group(data, uuid=None):

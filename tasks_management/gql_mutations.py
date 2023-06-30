@@ -7,7 +7,7 @@ from core.gql.gql_mutations.base_mutation import BaseHistoryModelCreateMutationM
     BaseHistoryModelUpdateMutationMixin, BaseHistoryModelDeleteMutationMixin
 from core.schema import OpenIMISMutation
 from tasks_management.apps import TasksManagementConfig
-from tasks_management.models import TaskGroup
+from tasks_management.models import TaskGroup, Task
 from tasks_management.services import TaskGroupService
 
 
@@ -23,6 +23,14 @@ class CreateTaskGroup(OpenIMISMutation.Input):
 
     def resolve_completion_policy(self, info):
         return self.completion_policy
+
+
+class UpdateTaskInput(OpenIMISMutation.Input):
+    class TaskStatusEnum(graphene.Enum):
+        COMPLETED = Task.Status.COMPLETED
+        FAILED = Task.Status.FAILED
+
+    status = graphene.Field(TaskStatusEnum, required=True)
 
 
 class UpdateTaskGroup(CreateTaskGroup):
@@ -112,3 +120,31 @@ class DeleteTaskGroupMutation(BaseHistoryModelDeleteMutationMixin, BaseMutation)
 
     class Input(OpenIMISMutation.Input):
         ids = graphene.List(graphene.UUID)
+
+
+class UpdateTaskMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
+    _mutation_class = "UpdateTaskMutation"
+    _mutation_module = "tasks_management"
+    _model = Task
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        if type(user) is AnonymousUser or not user.has_perms(
+                TasksManagementConfig.gql_task_update_perms):
+            raise ValidationError("mutation.authentication_required")
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        if "client_mutation_id" in data:
+            data.pop('client_mutation_id')
+        if "client_mutation_label" in data:
+            data.pop('client_mutation_label')
+
+        service = TaskService(user)
+        res = service.update(data)
+        if not res['success']:
+            return res
+        return None
+
+    class Input(UpdateTaskInput):
+        pass
