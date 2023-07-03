@@ -29,7 +29,7 @@ task_payload_resolve_any = {
     'source': 'test_source',
     'entity': InteractiveUser.objects.first(),
     'status': Task.Status.RECEIVED,
-    'executor_action_event': 'resolve_task_any',
+    'executor_action_event': 'approve_any',
     'business_status': dict(),
     'business_event': 'test_business_action_any',
     'data': dict()
@@ -39,7 +39,7 @@ task_payload_resolve_all = {
     'source': 'test_source',
     'entity': InteractiveUser.objects.first(),
     'status': Task.Status.RECEIVED,
-    'executor_action_event': 'resolve_task_all',
+    'executor_action_event': 'approve_all',
     'business_status': dict(),
     'business_event': 'test_business_action_all',
     'data': dict()
@@ -49,7 +49,7 @@ task_payload_resolve_n = {
     'source': 'test_source',
     'entity': InteractiveUser.objects.first(),
     'status': Task.Status.RECEIVED,
-    'executor_action_event': 'resolve_task_n',
+    'executor_action_event': 'approve_n',
     'business_status': dict(),
     'business_event': 'test_business_action_n',
     'data': dict()
