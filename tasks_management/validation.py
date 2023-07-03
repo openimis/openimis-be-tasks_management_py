@@ -40,11 +40,10 @@ class TaskValidation(BaseModelValidation):
 
     @classmethod
     def validate_update(cls, user, **data):
-        uuid = data.get('uuid', None)
-        instance = Task.objects.filter(id=uuid).first()
-        instance_status = instance.status
-        if instance_status == Task.Status.COMPLETED:
-            raise ValidationError(_("tasks_management.validation.task.updating_completed_task"))
+        errors = validate_task(data)
+        if errors:
+            raise ValidationError(errors)
+        super().validate_create(user, **data)
 
 
 def validate_task_group(data, uuid=None):
@@ -54,10 +53,27 @@ def validate_task_group(data, uuid=None):
     ]
 
 
+def validate_task(data):
+    return [
+        *validate_task_status(data)
+    ]
+
+
 def validate_task_executor(data, uuid=None):
     return [
         *validate_user_exists(data.get("user_id"))
     ]
+
+
+def validate_task_status(data):
+    uuid = data.get('id', None)
+    instance = Task.objects.filter(id=uuid).first()
+    instance_status = instance.status
+    if instance_status == Task.Status.COMPLETED or instance_status == Task.Status.FAILED:
+        return [{"message": _("tasks_management.validation.task.updating_completed_task" % {
+            'status': instance_status
+        })}]
+    return []
 
 
 def validate_user_exists(user_id):

@@ -3,19 +3,30 @@ import copy
 from django.test import TestCase
 
 from core.test_helpers import create_test_interactive_user
-from tasks_management.tests.data import task_payload
-from tasks_management.services import TaskService
-from tasks_management.models import Task
+from tasks_management.tests.data import task_payload, task_payload_resolve_any, \
+    task_payload_resolve_all, task_payload_resolve_n, task_group_add_payload_all, task_group_add_payload_n, \
+    task_group_add_payload_any
+from tasks_management.services import TaskService, TaskGroupService
+from tasks_management.models import Task, TaskGroup
+from tasks_management.tests.helpers import LogInHelper
 
 
 class TaskServiceTestCase(TestCase):
     user = None
+    task_executor = None
     service = None
+    taskgroup_all = None
+    taskgroup_any = None
+    taskgroup_n = None
 
     @classmethod
     def setUpClass(cls):
         super(TaskServiceTestCase, cls).setUpClass()
-        cls.user = create_test_interactive_user(username="test_admin")
+        cls.user = LogInHelper().get_or_create_user_api()
+        cls.task_executor = LogInHelper().get_or_create_task_executor_api()
+        cls.taskgroup_all_id = cls.__create_taskgroup(task_group_add_payload_all)
+        cls.taskgroup_n_id = cls.__create_taskgroup(task_group_add_payload_n)
+        cls.taskgroup_any_id = cls.__create_taskgroup(task_group_add_payload_any)
         cls.service = TaskService(cls.user)
 
     def test_create_task(self):
@@ -100,3 +111,73 @@ class TaskServiceTestCase(TestCase):
         self.assertTrue(result)
         self.assertTrue(result['success'])
         self.assertEqual(Task.objects.filter(id=obj_id).first().status, Task.Status.FAILED)
+
+    def test_resolve_task_any(self):
+        create_payload = {
+            **task_payload_resolve_any,
+            "task_group_id": self.taskgroup_any_id
+        }
+        result = self.service.create(create_payload)
+
+        self.assertTrue(result)
+        self.assertTrue(result['success'])
+        obj_id = result['data']['id']
+        self.assertTrue(Task.objects.filter(id=obj_id).exists())
+
+        resolve_payload = {"id": result["data"]["uuid"], "business_status": {"Jan Kowalski": "APPROVED"}}
+        result = self.service.resolve_task(resolve_payload)
+
+        self.assertTrue(result)
+        self.assertTrue(result['success'])
+        self.assertEqual(Task.objects.filter(id=obj_id).first().status, Task.Status.COMPLETED)
+
+    def test_resolve_task_all(self):
+        create_payload = {
+            **task_payload_resolve_all,
+            "task_group_id": self.taskgroup_any_id
+        }
+        result = self.service.create(create_payload)
+
+        self.assertTrue(result)
+        self.assertTrue(result['success'])
+        obj_id = result['data']['id']
+        self.assertTrue(Task.objects.filter(id=obj_id).exists())
+
+        resolve_payload = {"id": result["data"]["uuid"],
+                           "business_status": {"Jan Kowalski": "APPROVED", "Adam Kowal": "APPROVED"}}
+        result = self.service.resolve_task(resolve_payload)
+
+        self.assertTrue(result)
+        self.assertTrue(result['success'])
+        self.assertEqual(Task.objects.filter(id=obj_id).first().status, Task.Status.COMPLETED)
+
+    def test_resolve_task_n(self):
+        create_payload = {
+            **task_payload_resolve_n,
+            "task_group_id": self.taskgroup_any_id
+        }
+        result = self.service.create(create_payload)
+
+        self.assertTrue(result)
+        self.assertTrue(result['success'])
+        obj_id = result['data']['id']
+        self.assertTrue(Task.objects.filter(id=obj_id).exists())
+
+        resolve_payload = {"id": result["data"]["uuid"], "business_status": {"Jan Kowalski": "APPROVED"}}
+        result = self.service.resolve_task(resolve_payload)
+
+        self.assertTrue(result)
+        self.assertTrue(result['success'])
+        self.assertEqual(Task.objects.filter(id=obj_id).first().status, Task.Status.COMPLETED)
+
+    @classmethod
+    def __create_taskgroup(cls, payload):
+        object_data = {
+            **payload,
+            "user_ids": [cls.user.id, cls.task_executor.id]
+        }
+
+        obj = TaskGroupService(cls.user).create(object_data)
+        group_id = obj.get("data")["id"]
+
+        return group_id

@@ -2,7 +2,7 @@ from django.test import TestCase
 
 from tasks_management.models import TaskGroup
 from tasks_management.services import TaskGroupService
-from tasks_management.tests.data import task_group_add_payload
+from tasks_management.tests.data import task_group_add_payload_any
 
 from tasks_management.tests.helpers import LogInHelper
 
@@ -22,7 +22,7 @@ class TaskGroupServiceTest(TestCase):
         cls.service = TaskGroupService(cls.user)
         cls.query_all = TaskGroup.objects.filter(is_deleted=False)
         cls.payload = {
-            **task_group_add_payload,
+            **task_group_add_payload_any,
             "user_ids": [cls.task_executor.id]
         }
 

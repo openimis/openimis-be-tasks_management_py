@@ -5,8 +5,9 @@ from typing import Dict, Type
 from django.db import transaction
 
 from core.services import BaseService
-from core.signals import register_service_signal
+from core.signals import register_service_signal, REGISTERED_SERVICE_SIGNALS, __register_service_signal
 from core.services.utils import check_authentication, output_exception, output_result_success, model_representation
+from individual.models import Group
 
 from tasks_management.models import TaskGroup, TaskExecutor, Task
 from tasks_management.validation import TaskGroupValidation, TaskExecutorValidation, TaskValidation
@@ -51,6 +52,40 @@ class TaskService(BaseService):
                 return output_result_success({'task': model_representation(obj)})
         except Exception as exc:
             return output_exception(model_name=self.OBJECT_TYPE.__name__, method="complete", exception=exc)
+
+    @register_service_signal('task_service.resolve_task')
+    def resolve_task(self, obj_data):
+        try:
+            self.validation_class.validate_update(self.user, **obj_data)
+            obj = self.OBJECT_TYPE.objects.get(id=obj_data['id'])
+            incoming_status = obj_data.get('business_status')
+            self._update_task_business_status(obj, incoming_status)
+            self._send_executor_action_event(obj)
+            return output_result_success({'task': model_representation(obj)})
+        except Exception as exc:
+            return output_exception(model_name=self.OBJECT_TYPE.__name__, method="resolve", exception=exc)
+
+    def _update_task_business_status(self, task, incoming_status):
+        task.business_status = {**task.business_status, **incoming_status}
+        task.save(username=self.user.login_name)
+
+    def _send_executor_action_event(self, task):
+        event_signal_string = task.executor_action_event
+        registered_signal = REGISTERED_SERVICE_SIGNALS.get(event_signal_string, None)
+        if registered_signal is not None:
+            registered_signal.register_signal(["sender", "task", "user", "business_status"])
+            registered_signal.send_signal_before(sender=self.__class__,
+                                                 task=task,
+                                                 user=self.user,
+                                                 business_status=task.business_status)
+
+    def _send_business_event(self, task):
+        data = task.data
+        event_signal_string = task.business_event
+        registered_signal = REGISTERED_SERVICE_SIGNALS.get(event_signal_string, None)
+        if registered_signal is not None:
+            registered_signal.register_signal(["sender", "obj_data"])
+            registered_signal.send_signal_before(sender=self.__class__, obj_data=data)
 
 
 class TaskGroupService(BaseService):
