@@ -6,7 +6,8 @@ from django.db.models import Q
 
 from core.schema import OrderedDjangoFilterConnectionField
 from core.utils import append_validity_filter
-from tasks_management.gql_mutations import CreateTaskGroupMutation, UpdateTaskGroupMutation, DeleteTaskGroupMutation
+from tasks_management.gql_mutations import CreateTaskGroupMutation, UpdateTaskGroupMutation, DeleteTaskGroupMutation, \
+    UpdateTaskMutation
 from tasks_management.gql_queries import TaskGroupGQLType, TaskExecutorGQLType, TaskGQLType
 from tasks_management.models import TaskGroup, TaskExecutor, Task
 from tasks_management.apps import TasksManagementConfig
@@ -21,6 +22,7 @@ class Query(graphene.ObjectType):
         dateValidFrom__Gte=graphene.DateTime(),
         dateValidTo__Lte=graphene.DateTime(),
         client_mutation_id=graphene.String(),
+        search=graphene.String(),
     )
     task_executor = OrderedDjangoFilterConnectionField(
         TaskExecutorGQLType,
@@ -37,7 +39,8 @@ class Query(graphene.ObjectType):
         applyDefaultValidityFilter=graphene.Boolean(),
         client_mutation_id=graphene.String(),
         groupId=graphene.String(),
-        customFilters=graphene.List(of_type=graphene.String)
+        customFilters=graphene.List(of_type=graphene.String),
+        taskGroupId=graphene.String()
     )
 
     def resolve_task(self, info, **kwargs):
@@ -46,6 +49,10 @@ class Query(graphene.ObjectType):
         client_mutation_id = kwargs.get("client_mutation_id")
         if client_mutation_id:
             filters.append(Q(mutations__mutation__client_mutation_id=client_mutation_id))
+
+        taskGroupId = kwargs.get("taskGroupId")
+        if taskGroupId:
+            filters.append(Q(task_group__id=taskGroupId))
 
         Query._check_permissions(info.context.user, TasksManagementConfig.gql_task_search_perms)
         query = Task.objects.filter(*filters)
@@ -57,6 +64,14 @@ class Query(graphene.ObjectType):
         client_mutation_id = kwargs.get("client_mutation_id", None)
         if client_mutation_id:
             filters.append(Q(mutations__mutation__client_mutation_id=client_mutation_id))
+
+        search = kwargs.get("search", None)
+        if search is not None:
+            filters.append(
+                Q(code__icontains=search)
+                | Q(last_name__icontains=search)
+                | Q(other_names__icontains=search)
+            )
 
         Query._check_permissions(info.context.user, TasksManagementConfig.gql_task_group_search_perms)
         query = TaskGroup.objects.filter(*filters)
@@ -87,3 +102,5 @@ class Mutation(graphene.ObjectType):
     create_task_group = CreateTaskGroupMutation.Field()
     update_task_group = UpdateTaskGroupMutation.Field()
     delete_task_group = DeleteTaskGroupMutation.Field()
+
+    update_task = UpdateTaskMutation.Field()

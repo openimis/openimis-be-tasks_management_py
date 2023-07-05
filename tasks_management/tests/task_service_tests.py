@@ -9,6 +9,7 @@ from tasks_management.tests.data import task_payload, task_payload_resolve_any, 
 from tasks_management.services import TaskService, TaskGroupService
 from tasks_management.models import Task, TaskGroup
 from tasks_management.tests.helpers import LogInHelper
+from tasks_management.utils import APPROVED
 
 
 class TaskServiceTestCase(TestCase):
@@ -124,7 +125,7 @@ class TaskServiceTestCase(TestCase):
         obj_id = result['data']['id']
         self.assertTrue(Task.objects.filter(id=obj_id).exists())
 
-        resolve_payload = {"id": result["data"]["uuid"], "business_status": {"Jan Kowalski": "APPROVED"}}
+        resolve_payload = {"id": result["data"]["uuid"], "business_status": {"Jan Kowalski": APPROVED}}
         result = self.service.resolve_task(resolve_payload)
 
         self.assertTrue(result)
@@ -144,7 +145,7 @@ class TaskServiceTestCase(TestCase):
         self.assertTrue(Task.objects.filter(id=obj_id).exists())
 
         resolve_payload = {"id": result["data"]["uuid"],
-                           "business_status": {"Jan Kowalski": "APPROVED", "Adam Kowal": "APPROVED"}}
+                           "business_status": {"Jan Kowalski": APPROVED, "Adam Kowal": APPROVED}}
         result = self.service.resolve_task(resolve_payload)
 
         self.assertTrue(result)
@@ -163,7 +164,7 @@ class TaskServiceTestCase(TestCase):
         obj_id = result['data']['id']
         self.assertTrue(Task.objects.filter(id=obj_id).exists())
 
-        resolve_payload = {"id": result["data"]["uuid"], "business_status": {"Jan Kowalski": "APPROVED"}}
+        resolve_payload = {"id": result["data"]["uuid"], "business_status": {"Jan Kowalski": APPROVED}}
         result = self.service.resolve_task(resolve_payload)
 
         self.assertTrue(result)

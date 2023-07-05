@@ -67,7 +67,7 @@ def validate_task_executor(data, uuid=None):
 
 def validate_task_status(data):
     uuid = data.get('id', None)
-    instance = Task.objects.filter(id=uuid).first()
+    instance = Task.objects.get(id=uuid)
     instance_status = instance.status
     if instance_status == Task.Status.COMPLETED or instance_status == Task.Status.FAILED:
         return [{"message": _("tasks_management.validation.task.updating_completed_task" % {

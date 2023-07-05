@@ -8,7 +8,7 @@ from core.gql.gql_mutations.base_mutation import BaseHistoryModelCreateMutationM
 from core.schema import OpenIMISMutation
 from tasks_management.apps import TasksManagementConfig
 from tasks_management.models import TaskGroup, Task
-from tasks_management.services import TaskGroupService
+from tasks_management.services import TaskGroupService, TaskService
 
 
 class CreateTaskGroup(OpenIMISMutation.Input):
@@ -29,8 +29,11 @@ class UpdateTaskInput(OpenIMISMutation.Input):
     class TaskStatusEnum(graphene.Enum):
         COMPLETED = Task.Status.COMPLETED
         FAILED = Task.Status.FAILED
+        ACCEPTED = Task.Status.ACCEPTED
 
-    status = graphene.Field(TaskStatusEnum, required=True)
+    id = graphene.UUID(required=True)
+    status = graphene.Field(TaskStatusEnum, required=False)
+    task_group_id = graphene.UUID(required=False)
 
 
 class UpdateTaskGroup(CreateTaskGroup):

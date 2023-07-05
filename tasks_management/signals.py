@@ -3,28 +3,25 @@ from typing import Dict
 from core.service_signals import ServiceSignalBindType
 from core.signals import bind_service_signal
 from tasks_management.models import TaskGroup, Task
+from tasks_management.utils import APPROVED
 
 
 def resolve_task_any(task, business_status: Dict[str, str]):
-    if any(status == "APPROVED" for status in business_status.values()):
-        return True
-    return False
+    return any(status == "APPROVED" for status in business_status.values())
 
 
 def resolve_task_all(task, business_status: Dict[str, str]):
-    approve_count = sum(1 for status in business_status.values() if status == "APPROVED")
+    approve_count = sum(1 for status in business_status.values() if status == APPROVED)
     group_members = TaskGroup.objects.get(task=task).taskexecutor_set.count()
-    if approve_count == group_members:
-        return True
-    return False
+
+    return approve_count == group_members
 
 
 def resolve_task_n(task, business_status: Dict[str, str]):
-    approve_count = sum(1 for status in business_status.values() if status == "APPROVED")
+    approve_count = sum(1 for status in business_status.values() if status == APPROVED)
     n = 1  # hardcoded for now
-    if approve_count >= n:
-        return True
-    return False
+
+    return approve_count >= n
 
 
 def executor_action_event_handler(**kwargs):
@@ -48,13 +45,13 @@ def executor_action_event_handler(**kwargs):
 
 def business_event_handler(**kwargs):
     data = kwargs.get("result").get("data")
-    task = Task.objects.get(id=data["task"]["id"])
-    business_event = task.business_event
+    business_event = data["task"]["business_event"]
+    data = data["task"]["data"]
 
     func = {}.get(business_event, None)
 
     if func:
-        func(task.data)
+        func(data)
 
 
 def bind_service_signals():
