@@ -36,11 +36,16 @@ def _convert_to_serializable_json(entity):
 
     return json.dumps(converted_dict)
 
+
 def is_task_triage(user):
-    return user.has_perms(TasksManagementConfig.gql_task_group_create_perms) and \
-           user.has_perms(TasksManagementConfig.gql_task_group_search_perms) and \
-           user.has_perms(TasksManagementConfig.gql_task_group_update_perms) and \
-           user.has_perms(TasksManagementConfig.gql_task_group_delete_perms)
+    required_permissions = (
+            TasksManagementConfig.gql_task_group_create_perms +
+            TasksManagementConfig.gql_task_group_search_perms +
+            TasksManagementConfig.gql_task_group_update_perms +
+            TasksManagementConfig.gql_task_group_delete_perms
+    )
+    return all(user.has_perms(perm) for perm in required_permissions)
+
 
 class TaskGQLType(DjangoObjectType):
     uuid = graphene.String(source='uuid')
@@ -82,7 +87,6 @@ class TaskGQLType(DjangoObjectType):
             Q(task_group__taskexecutor__user=user) & ~Q(status=Task.Status.RECEIVED),
             is_deleted=False
         )
-
 
 
 class TaskGroupGQLType(DjangoObjectType):
