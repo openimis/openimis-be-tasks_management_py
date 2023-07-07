@@ -1,15 +1,17 @@
 import json
+import graphene
 from uuid import UUID
 
-import graphene
+from django.db.models import Q
 from graphene_django import DjangoObjectType
 
 from core import ExtendedConnection, prefix_filterset
 from core.datetimes.ad_datetime import AdDatetime
 from core.gql_queries import UserGQLType
-from core.models import HistoryModel
+from core.models import HistoryModel, Role
 from core.services.utils import model_representation
 from social_protection.models import BenefitPlan
+from tasks_management.apps import TasksManagementConfig
 from tasks_management.models import TaskGroup, TaskExecutor, Task
 
 
@@ -34,6 +36,11 @@ def _convert_to_serializable_json(entity):
 
     return json.dumps(converted_dict)
 
+def is_task_triage(user):
+    return user.has_perms(TasksManagementConfig.gql_task_group_create_perms) and \
+           user.has_perms(TasksManagementConfig.gql_task_group_search_perms) and \
+           user.has_perms(TasksManagementConfig.gql_task_group_update_perms) and \
+           user.has_perms(TasksManagementConfig.gql_task_group_delete_perms)
 
 class TaskGQLType(DjangoObjectType):
     uuid = graphene.String(source='uuid')
@@ -65,6 +72,17 @@ class TaskGQLType(DjangoObjectType):
             serialized_json = _convert_to_serializable_json(entity)
             return serialized_json
         return {}
+
+    @classmethod
+    def get_queryset(cls, queryset, info):
+        user = info.context.user
+        if user.is_imis_admin or is_task_triage(user):
+            return Task.objects.filter(is_deleted=False)
+        return Task.objects.filter(
+            Q(task_group__taskexecutor__user=user) & ~Q(status=Task.Status.RECEIVED),
+            is_deleted=False
+        )
+
 
 
 class TaskGroupGQLType(DjangoObjectType):
