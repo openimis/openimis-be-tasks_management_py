@@ -39,7 +39,8 @@ class UpdateTaskInput(OpenIMISMutation.Input):
 class UpdateTaskGroupInput(CreateTaskGroupInput):
     id = graphene.UUID(required=True)
 
-class ResolveTaskGroupInput(CreateTaskGroupInput):
+
+class ResolveTaskGroupInput(OpenIMISMutation.Input):
     id = graphene.UUID(required=True)
     business_status = graphene.JSONString(required=True)
 
@@ -155,6 +156,7 @@ class UpdateTaskMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
 
     class Input(UpdateTaskInput):
         pass
+
 
 class ResolveTaskMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
     _mutation_class = "ResolveTaskMutation"
