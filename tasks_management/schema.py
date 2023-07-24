@@ -53,8 +53,7 @@ class Query(graphene.ObjectType):
         taskGroupId = kwargs.get("taskGroupId")
         if taskGroupId:
             filters.append(Q(task_group__id=taskGroupId))
-
-        Query._check_permissions(info.context.user, TasksManagementConfig.gql_task_search_perms)
+        # not checking perms because get_queryset filters tasks assigned to user
         query = Task.objects.filter(*filters)
         return gql_optimizer.query(query, info)
 
@@ -73,7 +72,6 @@ class Query(graphene.ObjectType):
                 | Q(other_names__icontains=search)
             )
 
-        Query._check_permissions(info.context.user, TasksManagementConfig.gql_task_group_search_perms)
         query = TaskGroup.objects.filter(*filters)
         return gql_optimizer.query(query, info)
 

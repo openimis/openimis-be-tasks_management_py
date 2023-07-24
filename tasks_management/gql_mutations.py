@@ -164,12 +164,6 @@ class ResolveTaskMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
     _model = Task
 
     @classmethod
-    def _validate_mutation(cls, user, **data):
-        if type(user) is AnonymousUser or not user.has_perms(
-                TasksManagementConfig.gql_task_update_perms):
-            raise ValidationError("mutation.authentication_required")
-
-    @classmethod
     def _mutate(cls, user, **data):
         if "client_mutation_id" in data:
             data.pop('client_mutation_id')
