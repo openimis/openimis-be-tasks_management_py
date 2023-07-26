@@ -49,7 +49,7 @@ class TaskService(BaseService):
                 obj = self.OBJECT_TYPE.objects.get(id=obj_data['id'])
                 obj.status = Task.Status.FAILED if obj_data.get('failed', False) else Task.Status.COMPLETED
                 obj.save(username=self.user.login_name)
-                return output_result_success({'task': model_representation(obj), 'user': model_representation(self.user)})
+                return output_result_success({'task': model_representation(obj), 'user': {'id': f"{self.user.id}"}})
         except Exception as exc:
             return output_exception(model_name=self.OBJECT_TYPE.__name__, method="complete", exception=exc)
 
@@ -59,14 +59,16 @@ class TaskService(BaseService):
             self.validation_class.validate_update(self.user, **obj_data)
             obj = self.OBJECT_TYPE.objects.get(id=obj_data['id'])
             incoming_status = obj_data.get('business_status')
-            self._update_task_business_status(obj, incoming_status)
-            return output_result_success({'task': model_representation(obj), 'user': model_representation(self.user)})
+            d = self._update_task_business_status(obj, incoming_status)
+            print(d)
+            return output_result_success({'task': model_representation(obj), 'user': {'id': f"{self.user.id}"}})
         except Exception as exc:
             return output_exception(model_name=self.OBJECT_TYPE.__name__, method="resolve", exception=exc)
 
     def _update_task_business_status(self, task, incoming_status):
         task.business_status = {**task.business_status, **incoming_status}
         task.save(username=self.user.login_name)
+        return task
 
 
 class TaskGroupService(BaseService):
