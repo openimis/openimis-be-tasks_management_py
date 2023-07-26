@@ -59,8 +59,7 @@ class TaskService(BaseService):
             self.validation_class.validate_update(self.user, **obj_data)
             obj = self.OBJECT_TYPE.objects.get(id=obj_data['id'])
             incoming_status = obj_data.get('business_status')
-            d = self._update_task_business_status(obj, incoming_status)
-            print(d)
+            self._update_task_business_status(obj, incoming_status)
             return output_result_success({'task': model_representation(obj), 'user': {'id': f"{self.user.id}"}})
         except Exception as exc:
             return output_exception(model_name=self.OBJECT_TYPE.__name__, method="resolve", exception=exc)
