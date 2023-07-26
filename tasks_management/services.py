@@ -67,7 +67,6 @@ class TaskService(BaseService):
     def _update_task_business_status(self, task, incoming_status):
         task.business_status = {**task.business_status, **incoming_status}
         task.save(username=self.user.login_name)
-        return task
 
 
 class TaskGroupService(BaseService):
