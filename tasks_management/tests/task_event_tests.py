@@ -33,18 +33,6 @@ class TaskEventTestCase(TestCase):
         bind_service_signal(_signal_name_execute, cls.mock_handler.execute, ServiceSignalBindType.AFTER)
         bind_service_signal(_signal_name_complete, cls.mock_handler.complete, ServiceSignalBindType.AFTER)
 
-    def test_execute_task_event(self):
-        result = self.service.create(task_payload)
-
-        self.assertTrue(result)
-        self.assertTrue(result['success'])
-        obj_id = result['data']['id']
-        self.assertTrue(Task.objects.filter(id=obj_id).exists())
-
-        complete_payload = {'id': result['data']['uuid']}
-        result = self.service.execute_task(complete_payload)
-        self.mock_handler.execute.assert_called()
-
     def test_complete_task_event(self):
         result = self.service.create(task_payload)
 

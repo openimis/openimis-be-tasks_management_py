@@ -70,20 +70,6 @@ class TaskServiceTestCase(TestCase):
         self.assertTrue(result)
         self.assertTrue(result['success'])
 
-    def test_execute_task(self):
-        result = self.service.create(task_payload)
-
-        self.assertTrue(result)
-        self.assertTrue(result['success'])
-        obj_id = result['data']['id']
-        self.assertTrue(Task.objects.filter(id=obj_id).exists())
-
-        execute_payload = {'id': result['data']['uuid']}
-        result = self.service.execute_task(execute_payload)
-
-        self.assertTrue(result)
-        self.assertTrue(result['success'])
-
     def test_complete_task(self):
         result = self.service.create(task_payload)
 

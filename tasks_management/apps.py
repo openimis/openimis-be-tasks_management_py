@@ -9,6 +9,8 @@ DEFAULT_CONFIG = {
     "gql_task_create_perms": ["191002"],
     "gql_task_update_perms": ["191003"],
     "gql_task_delete_perms": ["191004"],
+    # To be used if task should use generic resolver
+    "default_executor_event": "default"
 }
 
 
@@ -24,6 +26,7 @@ class TasksManagementConfig(AppConfig):
     gql_task_create_perms = None
     gql_task_update_perms = None
     gql_task_delete_perms = None
+    default_executor_event = None
 
     def ready(self):
         from core.models import ModuleConfiguration
