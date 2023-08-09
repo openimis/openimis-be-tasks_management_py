@@ -11,7 +11,11 @@ logger = logging.getLogger(__name__)
 def resolve_task_all(_task, _user):
     if 'FAILED' in _task.business_status.values():
         TaskService(_user).complete_task({"id": _task.id, 'failed': True})
-    if sum(map('APPROVED'.__eq__, _task.business_status.values())) == _task.task_group.taskexecutor_set.count():
+    n_of_approves = sum(map('APPROVED'.__eq__, _task.business_status.values()))
+    n_of_executors = _task.task_group.taskexecutor_set.filter(task_group__is_deleted=False, is_deleted=False).count()
+    if not n_of_executors:
+        logger.warning("No valid executors of task with policy ALL %s", str(_task.uuid))
+    if n_of_approves == n_of_executors:
         TaskService(_user).complete_task({"id": _task.id})
 
 
