@@ -10,7 +10,6 @@ from core.datetimes.ad_datetime import AdDatetime
 from core.gql_queries import UserGQLType
 from core.models import HistoryModel, Role
 from core.services.utils import model_representation
-from social_protection.models import BenefitPlan
 from tasks_management.apps import TasksManagementConfig
 from tasks_management.models import TaskGroup, TaskExecutor, Task
 
@@ -47,6 +46,7 @@ def is_task_triage(user):
 class TaskGQLType(DjangoObjectType):
     uuid = graphene.String(source='uuid')
     current_entity_data = graphene.JSONString()
+    entity_string = graphene.String()
 
     class Meta:
         model = Task
@@ -69,11 +69,14 @@ class TaskGQLType(DjangoObjectType):
         connection_class = ExtendedConnection
 
     def resolve_current_entity_data(self, info):
-        entity = BenefitPlan.objects.first()
+        entity = self.entity
         if entity:
             serialized_json = _convert_to_serializable_json(entity)
             return serialized_json
-        return {}
+        return "{}"
+
+    def resolve_entity_string(self, info):
+        return self.entity.__str__()
 
     @classmethod
     def get_queryset(cls, queryset, info):

@@ -1,6 +1,7 @@
 import copy
 import datetime
 import decimal
+import json
 import logging
 import uuid
 from abc import abstractmethod, ABC
@@ -157,7 +158,8 @@ class CreateCheckerLogicServiceMixin(ABC):
                     'source': self._create_source,
                     'executor_action_event': self._create_executor_event,
                     'business_event': self._create_business_event,
-                    'data': self._adjust_create_task_data(copy.deepcopy(obj_data))
+                    'data': self._adjust_create_task_data(copy.deepcopy(obj_data)),
+                    'json_ext': self._data_for_json_ext_create(obj_data)
                 }
                 return task_service.create(task_data)
         except Exception as exc:
@@ -180,6 +182,9 @@ class CreateCheckerLogicServiceMixin(ABC):
             if any(map(lambda t: isinstance(obj_data[key], t), non_serializable_types)):
                 obj_data[key] = str(obj_data[key])
         return obj_data
+
+    def _data_for_json_ext_create(self, obj_data):
+        return dict
 
 
 class UpdateCheckerLogicServiceMixin(ABC):
@@ -204,7 +209,8 @@ class UpdateCheckerLogicServiceMixin(ABC):
                     'entity_type': ContentType.objects.get_for_model(self.OBJECT_TYPE),
                     'executor_action_event': self._update_executor_event,
                     'business_event': self._update_business_event,
-                    'data': self._adjust_update_task_data(copy.deepcopy(obj_data))
+                    'data': self._adjust_update_task_data(copy.deepcopy(obj_data)),
+                    'json_ext': self._data_for_json_ext_update(obj_data)
                 }
                 return task_service.create(task_data)
         except Exception as exc:
@@ -227,6 +233,9 @@ class UpdateCheckerLogicServiceMixin(ABC):
             if any(map(lambda t: isinstance(obj_data[key], t), non_serializable_types)):
                 obj_data[key] = str(obj_data[key])
         return obj_data
+
+    def _data_for_json_ext_update(self, obj_data):
+        return dict
 
 
 class DeleteCheckerLogicServiceMixin(ABC):
@@ -251,7 +260,8 @@ class DeleteCheckerLogicServiceMixin(ABC):
                     'entity_type': ContentType.objects.get_for_model(self.OBJECT_TYPE),
                     'executor_action_event': self._delete_executor_event,
                     'business_event': self._delete_business_event,
-                    'data': self._adjust_delete_task_data(copy.deepcopy(obj_data))
+                    'data': self._adjust_delete_task_data(copy.deepcopy(obj_data)),
+                    'json_ext': self._data_for_json_ext_delete(obj_data)
                 }
                 return task_service.create(task_data)
         except Exception as exc:
@@ -274,6 +284,9 @@ class DeleteCheckerLogicServiceMixin(ABC):
             if any(map(lambda t: isinstance(obj_data[key], t), non_serializable_types)):
                 obj_data[key] = str(obj_data[key])
         return obj_data
+
+    def _data_for_json_ext_delete(self, obj_data):
+        return dict
 
 
 class CheckerLogicServiceMixin(CreateCheckerLogicServiceMixin,

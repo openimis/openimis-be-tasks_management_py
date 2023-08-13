@@ -68,8 +68,8 @@ class Query(graphene.ObjectType):
         if search is not None:
             filters.append(
                 Q(code__icontains=search)
-                | Q(last_name__icontains=search)
-                | Q(other_names__icontains=search)
+                | Q(taskexecutor__user__i_user__last_name__icontains=search)
+                | Q(taskexecutor__user__i_user__other_names__icontains=search)
             )
 
         query = TaskGroup.objects.filter(*filters)
