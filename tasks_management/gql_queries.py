@@ -13,6 +13,8 @@ from core.services.utils import model_representation
 from tasks_management.apps import TasksManagementConfig
 from tasks_management.models import TaskGroup, TaskExecutor, Task
 
+DICT_STRING = "{}"
+
 
 def _convert_to_serializable_json(entity):
     converted_dict = {}
@@ -73,7 +75,7 @@ class TaskGQLType(DjangoObjectType):
         if entity:
             serialized_json = _convert_to_serializable_json(entity)
             return serialized_json
-        return "{}"
+        return DICT_STRING
 
     def resolve_entity_string(self, info):
         return self.entity.__str__()
