@@ -22,6 +22,8 @@ from tasks_management.validation import TaskGroupValidation, TaskExecutorValidat
 
 logger = logging.getLogger(__name__)
 
+EMPTY_DICT = {}
+
 
 class TaskService(BaseService):
     OBJECT_TYPE = Task
@@ -184,7 +186,7 @@ class CreateCheckerLogicServiceMixin(ABC):
         return obj_data
 
     def _data_for_json_ext_create(self, obj_data):
-        return dict
+        return EMPTY_DICT
 
 
 class UpdateCheckerLogicServiceMixin(ABC):
@@ -235,7 +237,7 @@ class UpdateCheckerLogicServiceMixin(ABC):
         return obj_data
 
     def _data_for_json_ext_update(self, obj_data):
-        return dict
+        return EMPTY_DICT
 
 
 class DeleteCheckerLogicServiceMixin(ABC):
@@ -286,7 +288,7 @@ class DeleteCheckerLogicServiceMixin(ABC):
         return obj_data
 
     def _data_for_json_ext_delete(self, obj_data):
-        return dict
+        return EMPTY_DICT
 
 
 class CheckerLogicServiceMixin(CreateCheckerLogicServiceMixin,
