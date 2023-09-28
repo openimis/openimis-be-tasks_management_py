@@ -184,7 +184,7 @@ class CreateCheckerLogicServiceMixin(ABC):
         return obj_data
 
     def _data_for_json_ext_create(self, obj_data):
-        return dict
+        return {}
 
 
 class UpdateCheckerLogicServiceMixin(ABC):
@@ -235,7 +235,7 @@ class UpdateCheckerLogicServiceMixin(ABC):
         return obj_data
 
     def _data_for_json_ext_update(self, obj_data):
-        return dict
+        return {}
 
 
 class DeleteCheckerLogicServiceMixin(ABC):
@@ -286,7 +286,7 @@ class DeleteCheckerLogicServiceMixin(ABC):
         return obj_data
 
     def _data_for_json_ext_delete(self, obj_data):
-        return dict
+        return {}
 
 
 class CheckerLogicServiceMixin(CreateCheckerLogicServiceMixin,
