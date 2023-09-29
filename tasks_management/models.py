@@ -4,7 +4,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.utils.translation import gettext_lazy as _
 
-from core.models import HistoryModel, User
+from core.models import HistoryModel, User, UUIDModel, ObjectMutation, MutationLog
 
 
 class TaskGroup(HistoryModel):
@@ -41,3 +41,8 @@ class Task(HistoryModel):
     business_event = models.CharField(max_length=255, null=True)
     task_group = models.ForeignKey(TaskGroup, on_delete=models.DO_NOTHING, null=True)
     data = models.JSONField(default=dict)
+
+
+class TaskMutation(UUIDModel, ObjectMutation):
+    task = models.ForeignKey(Task, models.DO_NOTHING, related_name='mutations')
+    mutation = models.ForeignKey(MutationLog, models.DO_NOTHING, related_name='task')

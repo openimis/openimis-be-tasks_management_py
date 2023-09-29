@@ -7,7 +7,7 @@ from core.gql.gql_mutations.base_mutation import BaseHistoryModelCreateMutationM
     BaseHistoryModelUpdateMutationMixin, BaseHistoryModelDeleteMutationMixin
 from core.schema import OpenIMISMutation
 from tasks_management.apps import TasksManagementConfig
-from tasks_management.models import TaskGroup, Task
+from tasks_management.models import TaskGroup, Task, TaskMutation
 from tasks_management.services import TaskGroupService, TaskService
 
 
@@ -80,14 +80,13 @@ class UpdateTaskGroupMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation)
 
     @classmethod
     def _validate_mutation(cls, user, **data):
-        if type(user) is AnonymousUser or not user.has_perms(
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(
                 TasksManagementConfig.gql_task_group_update_perms):
             raise ValidationError("mutation.authentication_required")
 
     @classmethod
     def _mutate(cls, user, **data):
-        if "client_mutation_id" in data:
-            data.pop('client_mutation_id')
         if "client_mutation_label" in data:
             data.pop('client_mutation_label')
 
@@ -137,19 +136,25 @@ class UpdateTaskMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
 
     @classmethod
     def _validate_mutation(cls, user, **data):
-        if type(user) is AnonymousUser or not user.has_perms(
+        super()._validate_mutation(user, **data)
+        if not user.has_perms(
                 TasksManagementConfig.gql_task_update_perms):
             raise ValidationError("mutation.authentication_required")
 
     @classmethod
     def _mutate(cls, user, **data):
-        if "client_mutation_id" in data:
-            data.pop('client_mutation_id')
+        client_mutation_id = data.pop('client_mutation_id', None)
         if "client_mutation_label" in data:
             data.pop('client_mutation_label')
 
         service = TaskService(user)
         res = service.update(data)
+        task = Task.objects.filter(id=data['id']).first()
+
+        if client_mutation_id:
+            TaskMutation.object_mutated(
+                user, client_mutation_id=client_mutation_id, task=task
+            )
         if not res['success']:
             return res
         return None
@@ -165,13 +170,18 @@ class ResolveTaskMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
 
     @classmethod
     def _mutate(cls, user, **data):
-        if "client_mutation_id" in data:
-            data.pop('client_mutation_id')
+        client_mutation_id = data.pop('client_mutation_id', None)
         if "client_mutation_label" in data:
             data.pop('client_mutation_label')
 
         service = TaskService(user)
         res = service.resolve_task(data)
+        task = Task.objects.filter(id=data['id']).first()
+
+        if client_mutation_id:
+            TaskMutation.object_mutated(
+                user, client_mutation_id=client_mutation_id, task=task
+            )
         if not res['success']:
             return res
         return None
