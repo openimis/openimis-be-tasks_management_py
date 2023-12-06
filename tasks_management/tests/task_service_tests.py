@@ -4,16 +4,14 @@ from unittest import skip
 from django.test import TestCase
 
 from core.test_helpers import create_test_interactive_user
-from tasks_management.tests.data import task_payload, task_payload_resolve_any, \
-    task_payload_resolve_all, task_payload_resolve_n, task_group_add_payload_all, task_group_add_payload_n, \
-    task_group_add_payload_any
+from tasks_management.tests.data import TaskDataMixin
 from tasks_management.services import TaskService, TaskGroupService
 from tasks_management.models import Task, TaskGroup
 from tasks_management.tests.helpers import LogInHelper
 from tasks_management.utils import APPROVED
 
 
-class TaskServiceTestCase(TestCase):
+class TaskServiceTestCase(TestCase, TaskDataMixin):
     user = None
     task_executor = None
     service = None
@@ -26,13 +24,14 @@ class TaskServiceTestCase(TestCase):
         super(TaskServiceTestCase, cls).setUpClass()
         cls.user = LogInHelper().get_or_create_user_api()
         cls.task_executor = LogInHelper().get_or_create_task_executor_api()
-        cls.taskgroup_all_id = cls.__create_taskgroup(task_group_add_payload_all)
-        cls.taskgroup_n_id = cls.__create_taskgroup(task_group_add_payload_n)
-        cls.taskgroup_any_id = cls.__create_taskgroup(task_group_add_payload_any)
+        cls.init_data()
+        cls.taskgroup_all_id = cls.__create_taskgroup(cls.task_group_add_payload_all)
+        cls.taskgroup_n_id = cls.__create_taskgroup(cls.task_group_add_payload_n)
+        cls.taskgroup_any_id = cls.__create_taskgroup(cls.task_group_add_payload_any)
         cls.service = TaskService(cls.user)
 
     def test_create_task(self):
-        result = self.service.create(task_payload)
+        result = self.service.create(self.task_payload)
 
         self.assertTrue(result)
         self.assertTrue(result['success'])
@@ -41,14 +40,14 @@ class TaskServiceTestCase(TestCase):
         self.assertEqual(Task.objects.filter(id=obj_id).first().status, Task.Status.RECEIVED)
 
     def test_update_task(self):
-        result = self.service.create(task_payload)
+        result = self.service.create(self.task_payload)
 
         self.assertTrue(result)
         self.assertTrue(result['success'])
         obj_id = result['data']['id']
         self.assertTrue(Task.objects.filter(id=obj_id).exists())
 
-        update_payload = copy.deepcopy(task_payload)
+        update_payload = copy.deepcopy(self.task_payload)
         update_payload['source'] = 'updated_source'
         update_payload['id'] = result['data']['uuid']
         result = self.service.update(update_payload)
@@ -57,7 +56,7 @@ class TaskServiceTestCase(TestCase):
         self.assertTrue(result['success'])
 
     def test_delete_task(self):
-        result = self.service.create(task_payload)
+        result = self.service.create(self.task_payload)
 
         self.assertTrue(result)
         self.assertTrue(result['success'])
@@ -71,7 +70,7 @@ class TaskServiceTestCase(TestCase):
         self.assertTrue(result['success'])
 
     def test_complete_task(self):
-        result = self.service.create(task_payload)
+        result = self.service.create(self.task_payload)
 
         self.assertTrue(result)
         self.assertTrue(result['success'])
@@ -86,7 +85,7 @@ class TaskServiceTestCase(TestCase):
         self.assertEqual(Task.objects.filter(id=obj_id).first().status, Task.Status.COMPLETED)
 
     def test_fail_task(self):
-        result = self.service.create(task_payload)
+        result = self.service.create(self.task_payload)
 
         self.assertTrue(result)
         self.assertTrue(result['success'])
@@ -103,7 +102,7 @@ class TaskServiceTestCase(TestCase):
     @skip('To be redeveloped')
     def test_resolve_task_any(self):
         create_payload = {
-            **task_payload_resolve_any,
+            **self.task_payload_resolve_any,
             "task_group_id": self.taskgroup_any_id
         }
         result = self.service.create(create_payload)
@@ -123,7 +122,7 @@ class TaskServiceTestCase(TestCase):
     @skip('To be redeveloped')
     def test_resolve_task_all(self):
         create_payload = {
-            **task_payload_resolve_all,
+            **self.task_payload_resolve_all,
             "task_group_id": self.taskgroup_any_id
         }
         result = self.service.create(create_payload)
@@ -144,7 +143,7 @@ class TaskServiceTestCase(TestCase):
     @skip('To be redeveloped')
     def test_resolve_task_n(self):
         create_payload = {
-            **task_payload_resolve_n,
+            **self.task_payload_resolve_n,
             "task_group_id": self.taskgroup_any_id
         }
         result = self.service.create(create_payload)

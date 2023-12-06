@@ -2,12 +2,12 @@ from django.test import TestCase
 
 from tasks_management.models import TaskGroup
 from tasks_management.services import TaskGroupService
-from tasks_management.tests.data import task_group_add_payload_any
+from tasks_management.tests.data import TaskDataMixin
 
 from tasks_management.tests.helpers import LogInHelper
 
 
-class TaskGroupServiceTest(TestCase):
+class TaskGroupServiceTest(TestCase, TaskDataMixin):
     user = None
     task_executor = None
     service = None
@@ -20,11 +20,13 @@ class TaskGroupServiceTest(TestCase):
         cls.user = LogInHelper().get_or_create_user_api()
         cls.task_executor = LogInHelper().get_or_create_task_executor_api()
         cls.service = TaskGroupService(cls.user)
+        cls.init_data()
         cls.query_all = TaskGroup.objects.filter(is_deleted=False)
         cls.payload = {
-            **task_group_add_payload_any,
+            **cls.task_group_add_payload_any,
             "user_ids": [cls.task_executor.id]
         }
+        
 
     def test_add_task_group(self):
         result = self.service.create(self.payload)

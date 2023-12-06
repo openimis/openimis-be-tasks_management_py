@@ -4,7 +4,7 @@ from unittest.mock import Mock
 from django.test import TestCase
 
 from core.test_helpers import create_test_interactive_user
-from tasks_management.tests.data import task_payload
+from tasks_management.tests.data import TaskDataMixin
 from tasks_management.services import TaskService
 from tasks_management.models import Task
 
@@ -16,7 +16,7 @@ _signal_name_execute = 'task_service.execute_task'
 _signal_name_complete = 'task_service.complete_task'
 
 
-class TaskEventTestCase(TestCase):
+class TaskEventTestCase(TestCase, TaskDataMixin):
     user = None
     service = None
     mock_handler = None
@@ -26,7 +26,7 @@ class TaskEventTestCase(TestCase):
         super(TaskEventTestCase, cls).setUpClass()
         cls.user = create_test_interactive_user(username="test_admin")
         cls.service = TaskService(cls.user)
-
+        cls.init_data()
         cls.mock_handler = Mock()
         REGISTERED_SERVICE_SIGNALS[_signal_name_execute] = RegisteredServiceSignal(_signal_providing_args)
         REGISTERED_SERVICE_SIGNALS[_signal_name_complete] = RegisteredServiceSignal(_signal_providing_args)
@@ -34,7 +34,7 @@ class TaskEventTestCase(TestCase):
         bind_service_signal(_signal_name_complete, cls.mock_handler.complete, ServiceSignalBindType.AFTER)
 
     def test_complete_task_event(self):
-        result = self.service.create(task_payload)
+        result = self.service.create(self.task_payload)
 
         self.assertTrue(result)
         self.assertTrue(result['success'])
