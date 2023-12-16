@@ -1,0 +1,3 @@
+from tasks_management.tests.task_group_service_tests import TaskGroupServiceTest
+from tasks_management.tests.task_service_tests import TaskServiceTestCase
+from tasks_management.tests.task_event_tests import TaskEventTestCase
