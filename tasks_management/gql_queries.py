@@ -6,9 +6,9 @@ from django.db.models import Q
 from graphene_django import DjangoObjectType
 
 from core import ExtendedConnection, prefix_filterset
-from core.datetimes.ad_datetime import AdDatetime
+from core.datetimes.ad_datetime import AdDatetime, AdDate
 from core.gql_queries import UserGQLType
-from core.models import HistoryModel, Role
+from core.models import HistoryModel
 from core.services.utils import model_representation
 from tasks_management.apps import TasksManagementConfig
 from tasks_management.models import TaskGroup, TaskExecutor, Task
@@ -18,22 +18,27 @@ DICT_STRING = "{}"
 
 def _convert_to_serializable_json(entity):
     converted_dict = {}
-    model_fields = set([field.name for field in entity._meta.fields])
-    history_fields = set([field.name for field in HistoryModel._meta.fields])
+
+    model_fields = set(field.name for field in entity._meta.fields)
+    history_fields = set(field.name for field in HistoryModel._meta.fields)
+
     fields_to_exclude = history_fields.intersection(model_fields)
+
+    def convert_value(instance):
+        if isinstance(instance, AdDatetime):
+            return instance.strftime('%Y-%m-%d %H:%M:%S')
+        elif isinstance(instance, AdDate):
+            return instance.strftime('%Y-%m-%d')
+        elif isinstance(instance, UUID):
+            return str(instance)
+        else:
+            return instance
 
     for key, value in model_representation(entity).items():
         if key in fields_to_exclude:
             continue
 
-        if isinstance(value, AdDatetime):
-            ad_datetime_str = value.strftime('%Y-%m-%d %H:%M:%S')
-            value = ad_datetime_str
-
-        if isinstance(value, UUID):
-            value = str(value)
-
-        converted_dict[key] = value
+        converted_dict[key] = convert_value(value)
 
     return json.dumps(converted_dict)
 
