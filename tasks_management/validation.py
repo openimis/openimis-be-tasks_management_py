@@ -124,7 +124,7 @@ def validate_existing_task(data):
 
     try:
         entity_instance = content_type.get_object_for_this_type(id=entity_id)
-    except content_type.model_class().DoesNotExist:
+    except ValueError:
         return [{"message": _("tasks_management.validation.entity_not_found") % {
             'entity_id': entity_id
         }}]
