@@ -122,21 +122,22 @@ def validate_existing_task(data):
     content_type = data.get('entity_type')
     entity_id = data.get('entity_id')
 
-    try:
-        entity_instance = content_type.get_object_for_this_type(id=entity_id)
-    except ValueError:
-        return [{"message": _("tasks_management.validation.entity_not_found") % {
-            'entity_id': entity_id
-        }}]
+    if isinstance(content_type, ContentType):
+        try:
+            entity_instance = content_type.get_object_for_this_type(id=entity_id)
+        except content_type.model_class().DoesNotExist:
+            return [{"message": _("tasks_management.validation.entity_not_found") % {
+                'entity_id': entity_id
+            }}]
 
-    filtered_tasks = Task.objects.filter(
-        Q(entity_type=content_type) &
-        Q(entity_id=str(entity_id)) &
-        (Q(status=Task.Status.ACCEPTED) | Q(status=Task.Status.RECEIVED))
-    )
+        filtered_tasks = Task.objects.filter(
+            Q(entity_type=content_type) &
+            Q(entity_id=str(entity_id)) &
+            (Q(status=Task.Status.ACCEPTED) | Q(status=Task.Status.RECEIVED))
+        )
 
-    if filtered_tasks.exists():
-        return [{"message": _("tasks_management.validation.another_task_pending") % {
-            'instance': str(entity_instance)
-        }}]
+        if filtered_tasks.exists():
+            return [{"message": _("tasks_management.validation.another_task_pending") % {
+                'instance': str(entity_instance)
+            }}]
     return []
