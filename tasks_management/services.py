@@ -2,25 +2,26 @@ import copy
 import datetime
 import decimal
 import logging
-import json
 import uuid
 from abc import abstractmethod, ABC
 from typing import Dict, Type
-from uuid import UUID
-
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
-
 from core.forms import User
 from core.services import BaseService
 from core.signals import register_service_signal
 from core.services.utils import check_authentication, output_exception, output_result_success, model_representation
 from tasks_management.apps import TasksManagementConfig
-
 from tasks_management.models import TaskGroup, TaskExecutor, Task
 from tasks_management.validation import TaskGroupValidation, TaskExecutorValidation, TaskValidation
 
 logger = logging.getLogger(__name__)
+
+non_serializable_types = (
+    uuid.UUID,
+    datetime.date,
+    decimal.Decimal,
+)
 
 
 class TaskService(BaseService):
@@ -132,13 +133,6 @@ class TaskExecutorService(BaseService):
         super().__init__(user, validation_class)
 
 
-non_serializable_types = (
-    uuid.UUID,
-    datetime.date,
-    decimal.Decimal,
-)
-
-
 class CreateCheckerLogicServiceMixin(ABC):
     """
     Provides default implementation for creating a create task for maker-checker logic.
@@ -158,8 +152,7 @@ class CreateCheckerLogicServiceMixin(ABC):
                     'source': self._create_source,
                     'executor_action_event': self._create_executor_event,
                     'business_event': self._create_business_event,
-                    'data': self._adjust_create_task_data(copy.deepcopy(obj_data)),
-                    'json_ext': self._data_for_json_ext_create(obj_data)
+                    'data': self._adjust_create_task_data(None, copy.deepcopy(obj_data)),
                 }
                 return task_service.create(task_data)
         except Exception as exc:
@@ -177,19 +170,13 @@ class CreateCheckerLogicServiceMixin(ABC):
     def _create_executor_event(self):
         return TasksManagementConfig.default_executor_event
 
-    def _adjust_create_task_data(self, obj_data):
-        for key in obj_data:
-            if any(map(lambda t: isinstance(obj_data[key], t), non_serializable_types)):
-                obj_data[key] = str(obj_data[key])
-        return obj_data
-
-    def _data_for_json_ext_create(self, obj_data):
-        return {}
+    def _adjust_create_task_data(self, entity, obj_data):
+        return _get_std_task_data_payload(entity, obj_data)
 
 
 class UpdateCheckerLogicServiceMixin(ABC):
     """
-    Provides default implementation for creating a update task for maker-checker logic.
+    Provides default implementation for creating an update task for maker-checker logic.
     To be used in implementations of core.services.BaseService.
     """
 
@@ -209,8 +196,7 @@ class UpdateCheckerLogicServiceMixin(ABC):
                     'entity_type': ContentType.objects.get_for_model(self.OBJECT_TYPE),
                     'executor_action_event': self._update_executor_event,
                     'business_event': self._update_business_event,
-                    'data': self._adjust_update_task_data(copy.deepcopy(obj_data)),
-                    'json_ext': self._data_for_json_ext_update(obj_data)
+                    'data': self._adjust_update_task_data(obj, copy.deepcopy(obj_data)),
                 }
                 return task_service.create(task_data)
         except Exception as exc:
@@ -228,14 +214,8 @@ class UpdateCheckerLogicServiceMixin(ABC):
     def _update_executor_event(self):
         return TasksManagementConfig.default_executor_event
 
-    def _adjust_update_task_data(self, obj_data):
-        for key in obj_data:
-            if any(map(lambda t: isinstance(obj_data[key], t), non_serializable_types)):
-                obj_data[key] = str(obj_data[key])
-        return obj_data
-
-    def _data_for_json_ext_update(self, obj_data):
-        return {}
+    def _adjust_update_task_data(self, entity, obj_data):
+        return _get_std_task_data_payload(entity, obj_data)
 
 
 class DeleteCheckerLogicServiceMixin(ABC):
@@ -260,8 +240,7 @@ class DeleteCheckerLogicServiceMixin(ABC):
                     'entity_type': ContentType.objects.get_for_model(self.OBJECT_TYPE),
                     'executor_action_event': self._delete_executor_event,
                     'business_event': self._delete_business_event,
-                    'data': self._adjust_delete_task_data(copy.deepcopy(obj_data)),
-                    'json_ext': self._data_for_json_ext_delete(obj_data)
+                    'data': self._adjust_delete_task_data(None, copy.deepcopy(obj_data)),
                 }
                 return task_service.create(task_data)
         except Exception as exc:
@@ -279,14 +258,8 @@ class DeleteCheckerLogicServiceMixin(ABC):
     def _delete_executor_event(self):
         return TasksManagementConfig.default_executor_event
 
-    def _adjust_delete_task_data(self, obj_data):
-        for key in obj_data:
-            if any(map(lambda t: isinstance(obj_data[key], t), non_serializable_types)):
-                obj_data[key] = str(obj_data[key])
-        return obj_data
-
-    def _data_for_json_ext_delete(self, obj_data):
-        return {}
+    def _adjust_delete_task_data(self, entity, obj_data):
+        return _get_std_task_data_payload(entity, obj_data)
 
 
 class CheckerLogicServiceMixin(CreateCheckerLogicServiceMixin,
@@ -294,7 +267,7 @@ class CheckerLogicServiceMixin(CreateCheckerLogicServiceMixin,
                                DeleteCheckerLogicServiceMixin,
                                ABC):
     """
-    Provides default implementation for creating create, update, and delete tasks for maker-checker logic
+    Provides default implementation for creating "create", "update", and "delete" tasks for maker-checker logic
     To be used in implementations of core.services.BaseService.
     """
     pass
@@ -324,7 +297,7 @@ def on_task_complete_service_handler(service_type: Type[BaseService]):
 
     def func(**kwargs):
         try:
-            result = kwargs.get('result', None)
+            result = kwargs.get('result', {})
             task = result['data']['task']
             business_event = task['business_event']
             # Tasks generated with CheckerLogicServiceMixin use naming scheme `ServiceName.operation` as business event.
@@ -337,10 +310,25 @@ def on_task_complete_service_handler(service_type: Type[BaseService]):
                 operation = business_event.split(".")[1]
                 if operation in operations:
                     user = User.objects.get(id=result['data']['user']['id'])
-                    data = task['data']
+                    data = task['data']['incoming_data']
                     service_operation_handler(operation, user, data)
         except Exception as e:
             logger.error("Error while executing on_task_complete", exc_info=e)
             return [str(e)]
 
     return func
+
+
+def _get_std_task_data_payload(entity, payload):
+    incoming_data = {}
+    current_data = {}
+    for key in payload:
+        if any(map(lambda t: isinstance(payload[key], t), non_serializable_types)):
+            incoming_data[key] = str(payload[key])
+            if entity:
+                current_data[key] = str(getattr(entity, key))
+        else:
+            incoming_data[key] = payload[key]
+            if entity:
+                current_data[key] = getattr(entity, key)
+    return {"incoming_data": incoming_data, "current_data": current_data}

@@ -3,12 +3,11 @@ from unittest import skip
 
 from django.test import TestCase
 
-from core.test_helpers import create_test_interactive_user
+from tasks_management.apps import TasksManagementConfig
 from tasks_management.tests.data import TaskDataMixin
 from tasks_management.services import TaskService, TaskGroupService
-from tasks_management.models import Task, TaskGroup
+from tasks_management.models import Task
 from tasks_management.tests.helpers import LogInHelper
-from tasks_management.utils import APPROVED
 
 
 class TaskServiceTestCase(TestCase, TaskDataMixin):
@@ -112,7 +111,8 @@ class TaskServiceTestCase(TestCase, TaskDataMixin):
         obj_id = result['data']['id']
         self.assertTrue(Task.objects.filter(id=obj_id).exists())
 
-        resolve_payload = {"id": result["data"]["uuid"], "business_status": {"Jan Kowalski": APPROVED}}
+        resolve_payload = {"id": result["data"]["uuid"],
+                           "business_status": {"Jan Kowalski": TasksManagementConfig.task_user_approved}}
         result = self.service.resolve_task(resolve_payload)
 
         self.assertTrue(result)
@@ -133,7 +133,8 @@ class TaskServiceTestCase(TestCase, TaskDataMixin):
         self.assertTrue(Task.objects.filter(id=obj_id).exists())
 
         resolve_payload = {"id": result["data"]["uuid"],
-                           "business_status": {"Jan Kowalski": APPROVED, "Adam Kowal": APPROVED}}
+                           "business_status": {"Jan Kowalski": TasksManagementConfig.task_user_approved,
+                                               "Adam Kowal": TasksManagementConfig.task_user_approved}}
         result = self.service.resolve_task(resolve_payload)
 
         self.assertTrue(result)
@@ -153,7 +154,8 @@ class TaskServiceTestCase(TestCase, TaskDataMixin):
         obj_id = result['data']['id']
         self.assertTrue(Task.objects.filter(id=obj_id).exists())
 
-        resolve_payload = {"id": result["data"]["uuid"], "business_status": {"Jan Kowalski": APPROVED}}
+        resolve_payload = {"id": result["data"]["uuid"],
+                           "business_status": {"Jan Kowalski": TasksManagementConfig.task_user_approved}}
         result = self.service.resolve_task(resolve_payload)
 
         self.assertTrue(result)
