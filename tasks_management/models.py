@@ -41,6 +41,7 @@ class Task(HistoryModel):
     business_event = models.CharField(max_length=255, null=True)
     task_group = models.ForeignKey(TaskGroup, on_delete=models.DO_NOTHING, null=True)
     data = models.JSONField(default=dict)
+    business_data_serializer = models.CharField(max_length=255, null=True)
 
 
 class TaskMutation(UUIDModel, ObjectMutation):

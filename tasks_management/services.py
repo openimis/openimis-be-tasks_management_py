@@ -151,6 +151,7 @@ class CreateCheckerLogicServiceMixin(ABC):
                 task_service = TaskService(self.user)
                 task_data = {
                     'source': self._create_source,
+                    'business_data_serializer': self._get_business_data_serializer(),
                     'executor_action_event': self._create_executor_event,
                     'business_event': self._create_business_event,
                     'data': self._adjust_create_task_data(None, copy.deepcopy(obj_data)),
@@ -174,6 +175,12 @@ class CreateCheckerLogicServiceMixin(ABC):
     def _adjust_create_task_data(self, entity, obj_data):
         return _get_std_task_data_payload(entity, obj_data)
 
+    def _get_business_data_serializer(self):
+        return f'{self.__class__.__module__}.{self.__class__.__name__}._business_data_serializer'
+
+    def _business_data_serializer(self, key, value):
+        return value
+
 
 class UpdateCheckerLogicServiceMixin(ABC):
     """
@@ -194,6 +201,7 @@ class UpdateCheckerLogicServiceMixin(ABC):
                 obj = self.OBJECT_TYPE.objects.get(id=obj_data['id'])
                 task_data = {
                     'source': self._update_source,
+                    'business_data_serializer': self._get_business_data_serializer(),
                     'entity_id': obj.id,
                     'entity_type': ContentType.objects.get_for_model(self.OBJECT_TYPE),
                     'executor_action_event': self._update_executor_event,
@@ -219,6 +227,12 @@ class UpdateCheckerLogicServiceMixin(ABC):
     def _adjust_update_task_data(self, entity, obj_data):
         return _get_std_task_data_payload(entity, obj_data)
 
+    def _get_business_data_serializer(self):
+        return f'{self.__class__.__module__}.{self.__class__.__name__}._business_data_serializer'
+
+    def _business_data_serializer(self, key, value):
+        return value
+
 
 class DeleteCheckerLogicServiceMixin(ABC):
     """
@@ -239,6 +253,7 @@ class DeleteCheckerLogicServiceMixin(ABC):
                 obj = self.OBJECT_TYPE.objects.get(id=obj_data['id'])
                 task_data = {
                     'source': self._delete_source,
+                    'business_data_serializer': self._get_business_data_serializer(),
                     'entity_id': obj.id,
                     'entity_type': ContentType.objects.get_for_model(self.OBJECT_TYPE),
                     'executor_action_event': self._delete_executor_event,
@@ -263,6 +278,12 @@ class DeleteCheckerLogicServiceMixin(ABC):
 
     def _adjust_delete_task_data(self, entity, obj_data):
         return _get_std_task_data_payload(entity, obj_data)
+
+    def _get_business_data_serializer(self):
+        return f'{self.__class__.__module__}.{self.__class__.__name__}._business_data_serializer'
+
+    def _business_data_serializer(self, key, value):
+        return value
 
 
 class CheckerLogicServiceMixin(CreateCheckerLogicServiceMixin,

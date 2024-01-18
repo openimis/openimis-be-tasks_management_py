@@ -1,46 +1,17 @@
-import json
+import importlib
+
 import graphene
-from uuid import UUID
+import copy
 
 from django.db.models import Q
 from graphene_django import DjangoObjectType
 
 from core import ExtendedConnection, prefix_filterset
-from core.datetimes.ad_datetime import AdDatetime, AdDate
 from core.gql_queries import UserGQLType
-from core.models import HistoryModel
-from core.services.utils import model_representation
 from tasks_management.apps import TasksManagementConfig
 from tasks_management.models import TaskGroup, TaskExecutor, Task
 
 DICT_STRING = "{}"
-
-
-def _convert_to_serializable_json(entity):
-    converted_dict = {}
-
-    model_fields = set(field.name for field in entity._meta.fields)
-    history_fields = set(field.name for field in HistoryModel._meta.fields)
-
-    fields_to_exclude = history_fields.intersection(model_fields)
-
-    def convert_value(instance):
-        if isinstance(instance, AdDatetime):
-            return instance.strftime('%Y-%m-%d %H:%M:%S')
-        elif isinstance(instance, AdDate):
-            return instance.strftime('%Y-%m-%d')
-        elif isinstance(instance, UUID):
-            return str(instance)
-        else:
-            return instance
-
-    for key, value in model_representation(entity).items():
-        if key in fields_to_exclude:
-            continue
-
-        converted_dict[key] = convert_value(value)
-
-    return json.dumps(converted_dict)
 
 
 def is_task_triage(user):
@@ -52,7 +23,7 @@ def is_task_triage(user):
 
 class TaskGQLType(DjangoObjectType):
     uuid = graphene.String(source='uuid')
-    current_entity_data = graphene.JSONString()
+    business_data = graphene.JSONString()
     entity_string = graphene.String()
 
     class Meta:
@@ -75,12 +46,35 @@ class TaskGQLType(DjangoObjectType):
         }
         connection_class = ExtendedConnection
 
-    def resolve_current_entity_data(self, info):
-        entity = self.entity
-        if entity:
-            serialized_json = _convert_to_serializable_json(entity)
-            return serialized_json
-        return DICT_STRING
+    def resolve_business_data(self, info):
+        data = self.data
+        serializer_path = self.business_data_serializer
+        serialized_data = copy.deepcopy(data)
+        module_path, class_name, method_name = serializer_path.rsplit('.', 2)
+
+        try:
+            service_module = importlib.import_module(module_path)
+
+            if hasattr(service_module, class_name):
+                service_class = getattr(service_module, class_name)
+                instance = service_class(info.context.user)
+
+                serializer_method = getattr(instance, method_name, None)
+
+                if callable(serializer_method):
+                    for data_key, data_value in data.items():
+                        serialized_data[data_key] = {
+                            key: serializer_method(key, value) for key, value in data_value.items()
+                        }
+
+        except ImportError:
+            return f"Error: Module '{module_path}' not found."
+        except AttributeError:
+            return f"Error: Attribute not found in the module or class."
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+        return serialized_data
 
     def resolve_entity_string(self, info):
         return self.entity.__str__()

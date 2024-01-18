@@ -62,11 +62,6 @@ class TaskValidation(BaseModelValidation):
     @classmethod
     def validate_delete(cls, user, **data):
         super().validate_delete(user, **data)
-        errors = [
-            *validate_existing_task(data)
-        ]
-        if errors:
-            raise ValidationError(errors)
 
 
 def validate_task_group(data, uuid=None):
