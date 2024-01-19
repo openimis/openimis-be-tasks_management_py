@@ -50,29 +50,30 @@ class TaskGQLType(DjangoObjectType):
         data = self.data
         serializer_path = self.business_data_serializer
         serialized_data = copy.deepcopy(data)
-        module_path, class_name, method_name = serializer_path.rsplit('.', 2)
+        if serializer_path:
+            module_path, class_name, method_name = serializer_path.rsplit('.', 2)
 
-        try:
-            service_module = importlib.import_module(module_path)
+            try:
+                service_module = importlib.import_module(module_path)
 
-            if hasattr(service_module, class_name):
-                service_class = getattr(service_module, class_name)
-                instance = service_class(info.context.user)
+                if hasattr(service_module, class_name):
+                    service_class = getattr(service_module, class_name)
+                    instance = service_class(info.context.user)
 
-                serializer_method = getattr(instance, method_name, None)
+                    serializer_method = getattr(instance, method_name, None)
 
-                if callable(serializer_method):
-                    for data_key, data_value in data.items():
-                        serialized_data[data_key] = {
-                            key: serializer_method(key, value) for key, value in data_value.items()
-                        }
+                    if callable(serializer_method):
+                        for data_key, data_value in data.items():
+                            serialized_data[data_key] = {
+                                key: serializer_method(key, value) for key, value in data_value.items()
+                            }
 
-        except ImportError:
-            return f"Error: Module '{module_path}' not found."
-        except AttributeError:
-            return f"Error: Attribute not found in the module or class."
-        except Exception as e:
-            return f"Error: {str(e)}"
+            except ImportError:
+                return f"Error: Module '{module_path}' not found."
+            except AttributeError:
+                return f"Error: Attribute not found in the module or class."
+            except Exception as e:
+                return f"Error: {str(e)}"
 
         return serialized_data
 
