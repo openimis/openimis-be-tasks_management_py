@@ -350,15 +350,18 @@ def on_task_complete_service_handler(service_type: Type[BaseService]):
 def _get_std_task_data_payload(entity, payload):
     incoming_data = {}
     current_data = {}
+
+    def serialize_value(value):
+        return str(value) if any(isinstance(value, t) for t in non_serializable_types) else value
+
     for key in payload:
-        if any(map(lambda t: isinstance(payload[key], t), non_serializable_types)):
-            incoming_data[key] = str(payload[key])
-            if entity:
-                current_data[key] = str(getattr(entity, key))
-        else:
-            incoming_data[key] = payload[key]
-            if entity:
-                current_data[key] = getattr(entity, key)
+        incoming_value = serialize_value(payload[key])
+        incoming_data[key] = incoming_value
+
+        if entity:
+            entity_value = getattr(entity, key)
+            current_data[key] = serialize_value(entity_value) if entity_value else entity_value
+
     return {"incoming_data": incoming_data, "current_data": current_data}
 
 
