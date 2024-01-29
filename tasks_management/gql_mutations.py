@@ -43,6 +43,7 @@ class UpdateTaskGroupInput(CreateTaskGroupInput):
 class ResolveTaskGroupInput(OpenIMISMutation.Input):
     id = graphene.UUID(required=True)
     business_status = graphene.JSONString(required=True)
+    additional_data = graphene.JSONString(required=False)
 
 
 class CreateTaskGroupMutation(BaseHistoryModelCreateMutationMixin, BaseMutation):

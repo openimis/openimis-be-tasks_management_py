@@ -63,10 +63,7 @@ class TaskGQLType(DjangoObjectType):
                     serializer_method = getattr(instance, method_name, None)
 
                     if callable(serializer_method):
-                        for data_key, data_value in data.items():
-                            serialized_data[data_key] = {
-                                key: serializer_method(key, value) for key, value in data_value.items()
-                            }
+                        serialized_data = serializer_method(serialized_data)
 
             except ImportError:
                 return f"Error: Module '{module_path}' not found."

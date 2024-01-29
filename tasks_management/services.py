@@ -7,6 +7,8 @@ from abc import abstractmethod, ABC
 from typing import Dict, Type
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
+
+from core.datetimes.ad_datetime import AdDate, AdDatetime
 from core.forms import User
 from core.services import BaseService
 from core.signals import register_service_signal
@@ -20,6 +22,8 @@ logger = logging.getLogger(__name__)
 non_serializable_types = (
     uuid.UUID,
     datetime.date,
+    AdDate,
+    AdDatetime,
     decimal.Decimal,
 )
 
@@ -178,8 +182,8 @@ class CreateCheckerLogicServiceMixin(ABC):
     def _get_business_data_serializer(self):
         return f'{self.__class__.__module__}.{self.__class__.__name__}._business_data_serializer'
 
-    def _business_data_serializer(self, key, value):
-        return value
+    def _business_data_serializer(self, data):
+        return data
 
 
 class UpdateCheckerLogicServiceMixin(ABC):
@@ -230,8 +234,8 @@ class UpdateCheckerLogicServiceMixin(ABC):
     def _get_business_data_serializer(self):
         return f'{self.__class__.__module__}.{self.__class__.__name__}._business_data_serializer'
 
-    def _business_data_serializer(self, key, value):
-        return value
+    def _business_data_serializer(self, data):
+        return data
 
 
 class DeleteCheckerLogicServiceMixin(ABC):
@@ -282,8 +286,8 @@ class DeleteCheckerLogicServiceMixin(ABC):
     def _get_business_data_serializer(self):
         return f'{self.__class__.__module__}.{self.__class__.__name__}._business_data_serializer'
 
-    def _business_data_serializer(self, key, value):
-        return value
+    def _business_data_serializer(self, data):
+        return data
 
 
 class CheckerLogicServiceMixin(CreateCheckerLogicServiceMixin,
@@ -356,3 +360,12 @@ def _get_std_task_data_payload(entity, payload):
             if entity:
                 current_data[key] = getattr(entity, key)
     return {"incoming_data": incoming_data, "current_data": current_data}
+
+
+def crud_business_data_builder(data, serializer):
+    serialized_data = copy.deepcopy(data)
+    for data_key, data_value in data.items():
+        serialized_data[data_key] = {
+            key: serializer(key, value) for key, value in data_value.items()
+        }
+    return serialized_data
