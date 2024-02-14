@@ -68,6 +68,7 @@ def validate_task_group(data, uuid=None):
     return [
         *validate_not_empty_field(data.get("code"), "code"),
         *validate_bf_unique_code(data.get('code'), uuid),
+        *validate_unique_task_source(data.get("task_sources"), uuid)
     ]
 
 
@@ -134,5 +135,27 @@ def validate_existing_task(data):
         if filtered_tasks.exists():
             return [{"message": _("tasks_management.validation.another_task_pending") % {
                 'instance': str(entity_instance)
+            }}]
+    return []
+
+
+def validate_unique_task_source(task_sources, group_id=None):
+    task_groups_by_source = {}
+
+    if task_sources:
+        queryset = TaskGroup.objects.filter(
+            is_deleted=False,
+        )
+        if group_id:
+            queryset = queryset.exclude(id=group_id)
+
+        for task_source in task_sources:
+            instance = queryset.filter(json_ext__contains={"task_sources": [task_source]}).first()
+            if instance:
+                task_groups_by_source[task_source] = instance.code
+
+        if task_groups_by_source:
+            return [{"message": _("tasks_management.validation.validate_unique_task_source") % {
+                'task_groups_by_source': task_groups_by_source
             }}]
     return []

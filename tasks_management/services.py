@@ -34,8 +34,13 @@ class TaskService(BaseService):
     def __init__(self, user, validation_class=TaskValidation):
         super().__init__(user, validation_class)
 
+    @transaction.atomic
     @register_service_signal('task_service.create')
     def create(self, obj_data):
+        source = obj_data.get('source')
+        task_group_query = TaskGroup.objects.filter(json_ext__contains={"task_sources": [source]})
+        if task_group_query.exists():
+            obj_data = {**obj_data, "task_group": task_group_query.first(), "status": Task.Status.ACCEPTED}
         return super().create(obj_data)
 
     @register_service_signal('task_service.update')
@@ -80,12 +85,14 @@ class TaskGroupService(BaseService):
         super().__init__(user, validation_class)
 
     @check_authentication
-    @transaction.atomic
     def create(self, obj_data: Dict[str, any]):
         try:
             with transaction.atomic():
                 user_ids = obj_data.pop('user_ids')
                 self.validation_class.validate_create(self.user, **obj_data)
+                task_sources = obj_data.pop('task_sources')
+                if task_sources:
+                    obj_data = {**obj_data, "json_ext": {"task_sources": task_sources}}
                 obj_: TaskGroup = self.OBJECT_TYPE(**obj_data)
                 task_group_output = self.save_instance(obj_)
                 task_group_id = task_group_output['data']['id']
@@ -102,14 +109,22 @@ class TaskGroupService(BaseService):
 
     @check_authentication
     def update(self, obj_data: Dict[str, any]):
-        user_ids = obj_data.pop('user_ids')
-        task_group_id = obj_data.get('id')
-        task_group = TaskGroup.objects.get(id=task_group_id)
-        current_task_executors = task_group.taskexecutor_set.filter(is_deleted=False)
-        current_user_ids = current_task_executors.values_list('user__id', flat=True)
-        if set(current_user_ids) != set(user_ids):
-            self._update_task_group_task_executors(task_group, user_ids)
-        return super().update(obj_data)
+        try:
+            with transaction.atomic():
+                user_ids = obj_data.pop('user_ids')
+                self.validation_class.validate_update(self.user, **obj_data)
+                task_sources = obj_data.pop('task_sources')
+                task_group_id = obj_data.get('id')
+                task_group = TaskGroup.objects.get(id=task_group_id)
+                if task_sources:
+                    obj_data = {**obj_data, "json_ext": {**task_group.json_ext, "task_sources": task_sources}}
+                current_task_executors = task_group.taskexecutor_set.filter(is_deleted=False)
+                current_user_ids = current_task_executors.values_list('user__id', flat=True)
+                if set(current_user_ids) != set(user_ids):
+                    self._update_task_group_task_executors(task_group, user_ids)
+                return super().update(obj_data)
+        except Exception as exc:
+            return output_exception(model_name=self.OBJECT_TYPE.__name__, method="update", exception=exc)
 
     @transaction.atomic
     def _update_task_group_task_executors(self, task_group, user_ids):
