@@ -40,7 +40,8 @@ class Query(graphene.ObjectType):
         client_mutation_id=graphene.String(),
         groupId=graphene.String(),
         customFilters=graphene.List(of_type=graphene.String),
-        taskGroupId=graphene.String()
+        taskGroupId=graphene.String(),
+        entityIds=graphene.List(graphene.UUID),
     )
 
     def resolve_task(self, info, **kwargs):
@@ -53,6 +54,11 @@ class Query(graphene.ObjectType):
         taskGroupId = kwargs.get("taskGroupId")
         if taskGroupId:
             filters.append(Q(task_group__id=taskGroupId))
+
+        entityIds = kwargs.get("entityIds")
+        if entityIds:
+            filters.append(Q(entity_id__in=entityIds))
+
         # not checking perms because get_queryset filters tasks assigned to user
         query = Task.objects.filter(*filters)
         return gql_optimizer.query(query, info)
