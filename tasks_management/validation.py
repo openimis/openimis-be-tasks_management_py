@@ -158,6 +158,7 @@ def validate_unique_task_source(task_sources, group_id=None):
     # Execute a single query
     matching_instances = queryset.filter(combined_query)
 
+    task_groups_by_source = {}
     for instance in matching_instances:
         # Find the intersection of task_sources and the instance's task_sources list
         intersecting_sources = set(task_sources) & set(instance.json_ext.get('task_sources', []))
@@ -170,3 +171,5 @@ def validate_unique_task_source(task_sources, group_id=None):
                 'task_groups_by_source': task_groups_by_source
             }
         }]
+
+    return []
