@@ -140,36 +140,21 @@ def validate_existing_task(data):
 
 
 def validate_unique_task_source(task_sources, group_id=None):
-    # Return early if no task sources provided
-    if not task_sources:
-        return []
-    
-    queryset = TaskGroup.objects.filter(is_deleted=False)
+    task_groups_by_source = {}
+
+    queryset = TaskGroup.objects.filter(
+        is_deleted=False,
+    )
     if group_id:
         queryset = queryset.exclude(id=group_id)
 
-    # Prepare a query to match any of the task sources in json_ext
-    task_source_queries = [Q(json_ext__contains={"task_sources": [task_source]}) for task_source in task_sources]
-    combined_query = task_source_queries.pop()
-
-    for query in task_source_queries:
-        combined_query |= query 
-
-    # Execute a single query
-    matching_instances = queryset.filter(combined_query)
-
-    task_groups_by_source = {}
-    for instance in matching_instances:
-        # Find the intersection of task_sources and the instance's task_sources list
-        intersecting_sources = set(task_sources) & set(instance.json_ext.get('task_sources', []))
-        for task_source in intersecting_sources:
+    for task_source in task_sources:
+        instance = queryset.filter(json_ext__contains={"task_sources": [task_source]}).first()
+        if instance:
             task_groups_by_source[task_source] = instance.code
 
     if task_groups_by_source:
-        return [{
-            "message": _("tasks_management.validation.validate_unique_task_source") % {
-                'task_groups_by_source': task_groups_by_source
-            }
-        }]
-
+        return [{"message": _("tasks_management.validation.validate_unique_task_source") % {
+            'task_groups_by_source': task_groups_by_source
+        }}]
     return []
