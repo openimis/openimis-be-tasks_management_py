@@ -117,7 +117,8 @@ class TaskGroupService(BaseService):
                 task_sources = obj_data.pop('task_sources')
                 task_group_id = obj_data.get('id')
                 task_group = TaskGroup.objects.get(id=task_group_id)
-                obj_data = {**obj_data, "json_ext": {**task_group.json_ext, "task_sources": list(task_sources)}}
+                json_ext = task_group.json_ext if task_group.json_ext else dict()
+                obj_data = {**obj_data, "json_ext": {**json_ext, "task_sources": list(task_sources)}}
                 current_task_executors = task_group.taskexecutor_set.filter(is_deleted=False)
                 current_user_ids = current_task_executors.values_list('user__id', flat=True)
                 if set(current_user_ids) != set(user_ids):
