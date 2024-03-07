@@ -8,6 +8,7 @@ from typing import Dict, Type
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 
+from django.core.exceptions import ValidationError
 from core.datetimes.ad_datetime import AdDate, AdDatetime
 from core.forms import User
 from core.services import BaseService
@@ -74,8 +75,28 @@ class TaskService(BaseService):
             return output_exception(model_name=self.OBJECT_TYPE.__name__, method="resolve", exception=exc)
 
     def _update_task_business_status(self, task, incoming_status):
-        task.business_status = {**task.business_status, **incoming_status}
-        task.save(username=self.user.login_name)
+        try:
+            task.business_status = self.__deep_merge(task.business_status, incoming_status)
+            task.save(username=self.user.login_name)
+        except ValidationError as e:
+            if e.message == 'Record has not be updated - there are no changes in fields':
+                return None
+
+    def __deep_merge(self, dict1, dict2):
+        """
+        Merges two dictionaries, deeply combining them.
+        """
+        result = copy.deepcopy(dict1)
+
+        for key, value in dict2.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = self.__deep_merge(result[key], value)
+            elif key in result and isinstance(result[key], list) and isinstance(value, list):
+                result[key] = result[key] + value
+            else:
+                result[key] = copy.deepcopy(value)
+
+        return result
 
 
 class TaskGroupService(BaseService):
