@@ -1,7 +1,6 @@
 import copy
 import datetime
 import decimal
-import json
 import logging
 import uuid
 from abc import abstractmethod, ABC
@@ -85,7 +84,6 @@ class TaskService(BaseService):
             if e.message == 'Record has not be updated - there are no changes in fields':
                 return None
 
-    import json
 
     def _insert_additional_data_to_json_ext(self, obj, additional_data):
         if not additional_data:
