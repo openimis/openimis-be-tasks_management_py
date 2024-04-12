@@ -69,7 +69,9 @@ class TaskService(BaseService):
             self.validation_class.validate_update(self.user, **obj_data)
             obj = self.OBJECT_TYPE.objects.get(id=obj_data['id'])
             incoming_status = obj_data.get('business_status')
+            additional_data = obj_data.get('additional_data')
             self._update_task_business_status(obj, incoming_status)
+            self._insert_additional_data_to_json_ext(obj, additional_data)
             return output_result_success({'task': model_representation(obj), 'user': {'id': f"{self.user.id}"}})
         except Exception as exc:
             return output_exception(model_name=self.OBJECT_TYPE.__name__, method="resolve", exception=exc)
@@ -81,6 +83,19 @@ class TaskService(BaseService):
         except ValidationError as e:
             if e.message == 'Record has not be updated - there are no changes in fields':
                 return None
+
+
+    def _insert_additional_data_to_json_ext(self, obj, additional_data):
+        if not additional_data:
+            return
+
+        obj.json_ext = obj.json_ext or {}
+
+        existing_additional_data = obj.json_ext.get("additional_resolve_data", {})
+        existing_additional_data[str(self.user.id)] = additional_data
+
+        obj.json_ext["additional_resolve_data"] = existing_additional_data
+        obj.save(username=self.user.login_name)
 
     def __deep_merge(self, dict1, dict2):
         """
