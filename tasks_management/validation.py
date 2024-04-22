@@ -4,16 +4,19 @@ from django.db.models import Q
 from django.contrib.contenttypes.models import ContentType
 
 from core.models import User
-from core.validation import BaseModelValidation
+from core.validation import BaseModelValidation, UniqueCodeValidationMixin, ObjectExistsValidationMixin, \
+    StringFieldValidationMixin
 from tasks_management.models import TaskGroup, TaskExecutor, Task
 
 
-class TaskGroupValidation(BaseModelValidation):
+class TaskGroupValidation(BaseModelValidation, UniqueCodeValidationMixin, ObjectExistsValidationMixin,
+                          StringFieldValidationMixin):
     OBJECT_TYPE = TaskGroup
 
     @classmethod
     def validate_create(cls, user, **data):
         super().validate_create(user, **data)
+        cls.validate_unique_code_name(data.get('code'))
         errors = validate_task_group(data)
         if errors:
             raise ValidationError(errors)
@@ -22,6 +25,8 @@ class TaskGroupValidation(BaseModelValidation):
     def validate_update(cls, user, **data):
         super().validate_update(user, **data)
         uuid = data.get('id')
+        cls.validate_object_exists(uuid)
+        cls.validate_unique_code_name(data.get('code'))
         errors = validate_task_group(data, uuid)
         if errors:
             raise ValidationError(errors)
@@ -38,24 +43,22 @@ class TaskExecutorValidation(BaseModelValidation):
             raise ValidationError(errors)
 
 
-class TaskValidation(BaseModelValidation):
+class TaskValidation(BaseModelValidation, ObjectExistsValidationMixin):
     OBJECT_TYPE = Task
 
     @classmethod
     def validate_create(cls, user, **data):
         super().validate_create(user, **data)
-        errors = [
-            *validate_existing_task(data)
-        ]
+        errors = validate_existing_task(data)
         if errors:
             raise ValidationError(errors)
 
     @classmethod
     def validate_update(cls, user, **data):
         super().validate_update(user, **data)
-        errors = [
-            *validate_task_status(data)
-        ]
+        uuid = data.get('id')
+        cls.validate_object_exists(uuid)
+        errors = validate_task_status(uuid)
         if errors:
             raise ValidationError(errors)
 
@@ -67,7 +70,6 @@ class TaskValidation(BaseModelValidation):
 def validate_task_group(data, uuid=None):
     return [
         *validate_not_empty_field(data.get("code"), "code"),
-        *validate_bf_unique_code(data.get('code'), uuid),
         *validate_unique_task_source(data.get("task_sources"), uuid)
     ]
 
@@ -78,40 +80,29 @@ def validate_task_executor(data, uuid=None):
     ]
 
 
-def validate_task_status(data):
-    uuid = data.get('id', None)
+def validate_task_status(uuid):
     instance = Task.objects.get(id=uuid)
     instance_status = instance.status
-    if instance_status == Task.Status.COMPLETED or instance_status == Task.Status.FAILED:
-        return [{"message": _("tasks_management.validation.task.updating_completed_task" % {
-            'status': instance_status
-        })}]
+    if instance_status in [Task.Status.COMPLETED, Task.Status.FAILED]:
+        return [
+            {"message": _("tasks_management.validation.task.updating_completed_task") % {'status': instance_status}}]
     return []
 
 
 def validate_user_exists(user_id):
-    if not User.objects.filter(id=user_id).first():
-        return [{"message": _("tasks_management.validation.group_executor.user_does_not_exist" % {
-            'code': user_id
-        })}]
-    return []
-
-
-def validate_bf_unique_code(code, uuid=None):
-    instance = TaskGroup.objects.filter(code=code, is_deleted=False).first()
-    if instance and instance.uuid != uuid:
-        return [{"message": _("tasks_management.validation.task_group.code_exists" % {
-            'code': code
-        })}]
+    if not User.objects.filter(id=user_id).exists():
+        return [{"message": _("tasks_management.validation.group_executor.user_does_not_exist") % {'code': user_id}}]
     return []
 
 
 def validate_not_empty_field(string, field):
-    if not string:
-        return [{"message": _("tasks_management.validation.field_empty") % {
-            'field': field
-        }}]
-    return []
+    try:
+        TaskGroupValidation().validate_empty_string(string)
+        TaskGroupValidation().validate_string_whitespace_end(string)
+        TaskGroupValidation().validate_string_whitespace_start(string)
+        return []
+    except ValidationError as e:
+        return [{"message": _("tasks_management.validation.field_empty") % {'field': field}}]
 
 
 def validate_existing_task(data):
@@ -122,9 +113,7 @@ def validate_existing_task(data):
         try:
             entity_instance = content_type.get_object_for_this_type(id=entity_id)
         except content_type.model_class().DoesNotExist:
-            return [{"message": _("tasks_management.validation.entity_not_found") % {
-                'entity_id': entity_id
-            }}]
+            return [{"message": _("tasks_management.validation.entity_not_found") % {'entity_id': entity_id}}]
 
         filtered_tasks = Task.objects.filter(
             Q(entity_type=content_type) &
@@ -133,18 +122,15 @@ def validate_existing_task(data):
         )
 
         if filtered_tasks.exists():
-            return [{"message": _("tasks_management.validation.another_task_pending") % {
-                'instance': str(entity_instance)
-            }}]
+            return [
+                {"message": _("tasks_management.validation.another_task_pending") % {'instance': str(entity_instance)}}]
     return []
 
 
 def validate_unique_task_source(task_sources, group_id=None):
     task_groups_by_source = {}
 
-    queryset = TaskGroup.objects.filter(
-        is_deleted=False,
-    )
+    queryset = TaskGroup.objects.filter(is_deleted=False)
     if group_id:
         queryset = queryset.exclude(id=group_id)
 
@@ -155,6 +141,5 @@ def validate_unique_task_source(task_sources, group_id=None):
 
     if task_groups_by_source:
         return [{"message": _("tasks_management.validation.validate_unique_task_source") % {
-            'task_groups_by_source': task_groups_by_source
-        }}]
+            'task_groups_by_source': task_groups_by_source}}]
     return []
