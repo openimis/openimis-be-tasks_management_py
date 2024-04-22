@@ -70,20 +70,20 @@ class TaskService(BaseService):
             obj = self.OBJECT_TYPE.objects.get(id=obj_data['id'])
             incoming_status = obj_data.get('business_status')
             additional_data = obj_data.get('additional_data')
-            self._update_task_business_status(obj, incoming_status)
+            self._update_task_business_status(obj, incoming_status, additional_data)
             self._insert_additional_data_to_json_ext(obj, additional_data)
             return output_result_success({'task': model_representation(obj), 'user': {'id': f"{self.user.id}"}})
         except Exception as exc:
             return output_exception(model_name=self.OBJECT_TYPE.__name__, method="resolve", exception=exc)
 
-    def _update_task_business_status(self, task, incoming_status):
+    def _update_task_business_status(self, task, incoming_status, additional_data):
         try:
             task.business_status = self.__deep_merge(task.business_status, incoming_status)
+            self._insert_additional_data_to_json_ext(task, additional_data)
             task.save(username=self.user.login_name)
         except ValidationError as e:
             if e.message == 'Record has not be updated - there are no changes in fields':
                 return None
-
 
     def _insert_additional_data_to_json_ext(self, obj, additional_data):
         if not additional_data:
@@ -95,7 +95,6 @@ class TaskService(BaseService):
         existing_additional_data[str(self.user.id)] = additional_data
 
         obj.json_ext["additional_resolve_data"] = existing_additional_data
-        obj.save(username=self.user.login_name)
 
     def __deep_merge(self, dict1, dict2):
         """
