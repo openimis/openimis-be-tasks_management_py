@@ -5,10 +5,12 @@ DEFAULT_CONFIG = {
     "gql_task_group_create_perms": ["190002"],
     "gql_task_group_update_perms": ["190003"],
     "gql_task_group_delete_perms": ["190004"],
+    
     "gql_task_search_perms": ["191001"],
     "gql_task_create_perms": ["191002"],
     "gql_task_update_perms": ["191003"],
     "gql_task_delete_perms": ["191004"],
+    "gql_task_search_all_perms": ["191005"],
     # To be used if task should use generic resolver
     "default_executor_event": "default",
     "task_user_approved": "APPROVED",
@@ -27,6 +29,7 @@ class TasksManagementConfig(AppConfig):
     gql_task_create_perms = None
     gql_task_update_perms = None
     gql_task_delete_perms = None
+    gql_task_search_all_perms = None
     default_executor_event = None
     task_user_approved = None
 
