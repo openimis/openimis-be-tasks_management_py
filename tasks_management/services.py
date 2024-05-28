@@ -358,9 +358,9 @@ class CheckerLogicServiceMixin(CreateCheckerLogicServiceMixin,
     pass
 
 
-def on_task_complete_service_handler(service_type: Type[BaseService]):
+def on_task_complete_service_handler(service_type):
     """
-    Generic complete_task handler for BaseService using any combination of CreateCheckerLogicServiceMixin,
+    Generic complete_task handler any combination of CreateCheckerLogicServiceMixin,
     UpdateCheckerLogicServiceMixin, DeleteCheckerLogicServiceMixin. It will automatically detect available
     task business events fot that service type.
 
