@@ -1,7 +1,7 @@
 import graphene as graphene
 from django.db import transaction
 from django.contrib.auth.models import AnonymousUser
-from pydantic.error_wrappers import ValidationError
+from django.core.exceptions import ValidationError
 
 from core.gql.gql_mutations.base_mutation import BaseHistoryModelCreateMutationMixin, BaseMutation, \
     BaseHistoryModelUpdateMutationMixin, BaseHistoryModelDeleteMutationMixin
