@@ -127,9 +127,7 @@ class TaskGroupService(BaseService):
                 obj_data = self._adjust_update_payload(obj_data)
                 self.validation_class.validate_create(self.user, **obj_data)
                 task_sources = obj_data.pop('task_sources')
-                task_allowed_sources = obj_data.pop('task_allowed_sources')
-                obj_data = {**obj_data, "json_ext": {"task_sources": list(task_sources)},
-                            "task_allowed_sources": {"task_allowed_sources": list(task_allowed_sources)}}
+                obj_data = {**obj_data, "json_ext": {"task_sources": list(task_sources)}}
                 obj_: TaskGroup = self.OBJECT_TYPE(**obj_data)
                 task_group_output = self.save_instance(obj_)
                 task_group_id = task_group_output['data']['id']
@@ -152,12 +150,10 @@ class TaskGroupService(BaseService):
                 obj_data = self._adjust_update_payload(obj_data)
                 self.validation_class.validate_update(self.user, **obj_data)
                 task_sources = obj_data.pop('task_sources')
-                task_allowed_sources = obj_data.pop('task_allowed_sources')
                 task_group_id = obj_data.get('id')
                 task_group = TaskGroup.objects.get(id=task_group_id)
                 json_ext = task_group.json_ext if task_group.json_ext else dict()
-                obj_data = {**obj_data, "json_ext": {**json_ext, "task_sources": list(task_sources)},
-                            "task_allowed_sources": {"allowed_task_sources": list(task_allowed_sources)}}
+                obj_data = {**obj_data, "json_ext": {**json_ext, "task_sources": list(task_sources)}}
                 current_task_executors = task_group.taskexecutor_set.filter(is_deleted=False)
                 current_user_ids = current_task_executors.values_list('user__id', flat=True)
                 if set(current_user_ids) != set(user_ids):

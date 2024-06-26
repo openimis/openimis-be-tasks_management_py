@@ -17,7 +17,6 @@ class TaskGroup(HistoryModel):
     completion_policy = models.CharField(
         max_length=50, choices=TaskGroupCompletionPolicy.choices, null=False, blank=False
     )
-    task_allowed_sources = models.JSONField(blank=True, null=True)
 
 
 class TaskExecutor(HistoryModel):
