@@ -31,16 +31,17 @@ class Task(HistoryModel):
         COMPLETED = 'COMPLETED', _('Completed')
         FAILED = 'FAILED', _('Failed')
 
-    source = models.CharField(max_length=255, null=True)
-    entity_type = models.ForeignKey(ContentType, models.DO_NOTHING, null=True, unique=False)
-    entity_id = models.CharField(max_length=255, null=True)
+    source = models.CharField(max_length=255,  blank=True, null=True)
+    entity_type = models.ForeignKey(ContentType, models.DO_NOTHING, blank=True, null=True, unique=False)
+    entity_id = models.CharField(max_length=255,  blank=True, null=True)
     entity = GenericForeignKey('entity_type', 'entity_id')
     status = models.CharField(max_length=255, choices=Status.choices, default=Status.RECEIVED)
-    executor_action_event = models.CharField(max_length=255, null=True)
-    business_status = models.JSONField(default=dict)
-    business_event = models.CharField(max_length=255, null=True)
-    task_group = models.ForeignKey(TaskGroup, on_delete=models.DO_NOTHING, null=True)
-    data = models.JSONField(default=dict)
+    executor_action_event = models.CharField(max_length=255, blank=True, null=True)
+    business_status = models.JSONField( blank=True,default=dict)
+    business_event = models.CharField(max_length=255, blank=True, null=True)
+    task_group = models.ForeignKey(TaskGroup, on_delete=models.DO_NOTHING,  blank=True, null=True)
+    data = models.JSONField(blank=True, default=dict)
+    business_data_serializer = models.CharField(max_length=255, blank=True, null=True)
 
 
 class TaskMutation(UUIDModel, ObjectMutation):

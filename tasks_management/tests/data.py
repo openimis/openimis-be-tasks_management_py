@@ -3,11 +3,7 @@ from tasks_management.models import Task
 from tasks_management.models import TaskGroup
 
 
-
 class TaskDataMixin:
-    
-    
-
     task_group_add_payload_any = {
         "code": "example_any",
         "completion_policy": TaskGroup.TaskGroupCompletionPolicy.ANY,
@@ -60,7 +56,7 @@ class TaskDataMixin:
         'business_event': 'test_business_action_n',
         'data': dict()
     }
-    
+
     @classmethod
     def init_data(cls):
         entity = InteractiveUser.objects.first()
@@ -68,5 +64,3 @@ class TaskDataMixin:
         cls.task_payload_resolve_all['entity'] = entity
         cls.task_payload_resolve_any['entity'] = entity
         cls.task_payload['entity'] = entity
-
-

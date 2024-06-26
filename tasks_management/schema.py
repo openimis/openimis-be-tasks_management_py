@@ -1,4 +1,5 @@
 import graphene
+import json
 import graphene_django_optimizer as gql_optimizer
 
 from django.contrib.auth.models import AnonymousUser
@@ -40,7 +41,9 @@ class Query(graphene.ObjectType):
         client_mutation_id=graphene.String(),
         groupId=graphene.String(),
         customFilters=graphene.List(of_type=graphene.String),
-        taskGroupId=graphene.String()
+        taskGroupId=graphene.String(),
+        entityIds=graphene.List(graphene.UUID),
+        entityString__Icontains=graphene.String(),
     )
 
     def resolve_task(self, info, **kwargs):
@@ -53,8 +56,19 @@ class Query(graphene.ObjectType):
         taskGroupId = kwargs.get("taskGroupId")
         if taskGroupId:
             filters.append(Q(task_group__id=taskGroupId))
+
+        entityIds = kwargs.get("entityIds")
+        if entityIds:
+            filters.append(Q(entity_id__in=entityIds))
+
         # not checking perms because get_queryset filters tasks assigned to user
         query = Task.objects.filter(*filters)
+
+        entity_string = kwargs.get("entityString__Icontains")
+        if entity_string:
+            task_ids = [task.id for task in query if entity_string.lower() in str(task.entity).lower()]
+            query = query.filter(id__in=task_ids)
+
         return gql_optimizer.query(query, info)
 
     def resolve_task_group(self, info, **kwargs):

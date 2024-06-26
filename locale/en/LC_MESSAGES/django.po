@@ -60,3 +60,12 @@ msgstr "Completed"
 #: tasks_management/models.py:32
 msgid "Failed"
 msgstr "Failed"
+
+msgid "tasks_management.validation.another_task_pending"
+msgstr "Another task is pending for %(instance)."
+
+msgid "tasks_management.validation.entity_not_found"
+msgstr "Entity not found."
+
+msgid "tasks_management.validation.validate_unique_task_source"
+msgstr "Task sources already assigned to task groups: %(task_groups_by_source)"
