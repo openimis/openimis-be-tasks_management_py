@@ -21,7 +21,6 @@ class CreateTaskGroupInput(OpenIMISMutation.Input):
     completion_policy = graphene.Field(TaskGroupCompletionPolicyEnum, required=True)
     user_ids = graphene.List(graphene.UUID)
     task_sources = graphene.List(graphene.String)
-    task_allowed_sources = graphene.List(graphene.String)
 
     def resolve_completion_policy(self, info):
         return self.completion_policy
