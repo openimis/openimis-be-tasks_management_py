@@ -6,6 +6,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.db.models import Q
 
 from core.schema import OrderedDjangoFilterConnectionField
+from core.services import wait_for_mutation
 from core.utils import append_validity_filter
 from tasks_management.gql_mutations import CreateTaskGroupMutation, UpdateTaskGroupMutation, DeleteTaskGroupMutation, \
     UpdateTaskMutation, ResolveTaskMutation
@@ -62,6 +63,7 @@ class Query(graphene.ObjectType):
 
         client_mutation_id = kwargs.get("client_mutation_id")
         if client_mutation_id:
+            wait_for_mutation(client_mutation_id)
             filters.append(Q(mutations__mutation__client_mutation_id=client_mutation_id))
 
         taskGroupId = kwargs.get("taskGroupId")
@@ -87,6 +89,7 @@ class Query(graphene.ObjectType):
 
         client_mutation_id = kwargs.get("client_mutation_id")
         if client_mutation_id:
+            wait_for_mutation(client_mutation_id)
             filters.append(Q(mutations__mutation__client_mutation_id=client_mutation_id))
 
         taskGroupId = kwargs.get("taskGroupId")
@@ -112,6 +115,7 @@ class Query(graphene.ObjectType):
 
         client_mutation_id = kwargs.get("client_mutation_id", None)
         if client_mutation_id:
+            wait_for_mutation(client_mutation_id)
             filters.append(Q(mutations__mutation__client_mutation_id=client_mutation_id))
 
         search = kwargs.get("search", None)
@@ -130,6 +134,7 @@ class Query(graphene.ObjectType):
 
         client_mutation_id = kwargs.get("client_mutation_id")
         if client_mutation_id:
+            wait_for_mutation(client_mutation_id)
             filters.append(Q(mutations__mutation__client_mutation_id=client_mutation_id))
 
         task_group_id_string = kwargs.get("taskGroupIdString")
