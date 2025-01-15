@@ -14,7 +14,7 @@ from core.forms import User
 from core.services import BaseService
 from core.signals import register_service_signal
 from core.services.utils import check_authentication, output_exception, output_result_success, model_representation
-from core.utils import json_serialize_value
+from core.utils import to_json_safe_value
 from tasks_management.apps import TasksManagementConfig
 from tasks_management.models import TaskGroup, TaskExecutor, Task
 from tasks_management.validation import TaskGroupValidation, TaskExecutorValidation, TaskValidation
@@ -289,7 +289,7 @@ class UpdateCheckerLogicServiceMixin(ABC):
         if isinstance(json_ext, dict):
             for key, value in obj_data.items():
                 if key in json_ext and json_ext[key] != value:
-                    json_ext[key] = json_serialize_value(value)
+                    json_ext[key] = to_json_safe_value(value)
 
     def _get_business_data_serializer(self):
         return f'{self.__class__.__module__}.{self.__class__.__name__}._business_data_serializer'
@@ -412,12 +412,12 @@ def _get_std_crud_task_data_payload(entity, payload):
     current_data = {}
 
     for key in payload:
-        incoming_value = json_serialize_value(payload[key])
+        incoming_value = to_json_safe_value(payload[key])
         incoming_data[key] = incoming_value
 
         if entity:
             entity_value = getattr(entity, key)
-            current_data[key] = json_serialize_value(entity_value) if entity_value else entity_value
+            current_data[key] = to_json_safe_value(entity_value) if entity_value else entity_value
 
     return {"incoming_data": incoming_data, "current_data": current_data}
 
@@ -426,7 +426,7 @@ def _get_std_task_data_payload(payload):
     incoming_data = {}
 
     for key in payload:
-        incoming_value = json_serialize_value(payload[key])
+        incoming_value = to_json_safe_value(payload[key])
         incoming_data[key] = incoming_value
 
     return incoming_data
