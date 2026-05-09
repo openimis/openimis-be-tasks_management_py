@@ -8,7 +8,6 @@ from typing import Dict, Type
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 
-from django.core.exceptions import ValidationError
 from core.datetimes.ad_datetime import AdDate, AdDatetime
 from core.forms import User
 from core.services import BaseService
@@ -70,13 +69,9 @@ class TaskService(BaseService):
             return output_exception(model_name=self.OBJECT_TYPE.__name__, method="resolve", exception=exc)
 
     def _update_task_business_status(self, task, incoming_status, additional_data):
-        try:
-            task.business_status = self.__deep_merge(task.business_status, incoming_status)
-            self._insert_additional_data_to_json_ext(task, additional_data)
-            task.save(username=self.user.login_name)
-        except ValidationError as e:
-            if e.message == 'Record has not be updated - there are no changes in fields':
-                return None
+        task.business_status = self.__deep_merge(task.business_status, incoming_status)
+        self._insert_additional_data_to_json_ext(task, additional_data)
+        task.save(username=self.user.login_name)
 
     def _insert_additional_data_to_json_ext(self, obj, additional_data):
         if not additional_data:
