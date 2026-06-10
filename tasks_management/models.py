@@ -12,55 +12,43 @@ class TaskGroup(HistoryModel):
         ALL = 'ALL', _('ALL')
         ANY = 'ANY', _('ANY')
         N = 'N', _('N')
-        LAYERED = 'LAYERED', _('LAYERED')
-
-    class RejectionPolicy(models.TextChoices):
-        RESET_TO_FIRST = 'RESET_TO_FIRST', _('Reset to first layer')
-        RETURN_PREVIOUS = 'RETURN_PREVIOUS', _('Return to previous layer')
-
-    class RejectionScope(models.TextChoices):
-        WHOLE_TASK = 'WHOLE_TASK', _('Whole task')
-        DISPUTED_ONLY = 'DISPUTED_ONLY', _('Disputed records only')
 
     code = models.CharField(max_length=255, null=False, blank=False)
     completion_policy = models.CharField(
         max_length=50, choices=TaskGroupCompletionPolicy.choices, null=False, blank=False
     )
-    rejection_policy = models.CharField(
-        max_length=50, choices=RejectionPolicy.choices, null=True, blank=True
-    )
-    rejection_scope = models.CharField(
-        max_length=50, choices=RejectionScope.choices, null=True, blank=True
-    )
-    allow_executor_override = models.BooleanField(default=False)
+    threshold = models.PositiveSmallIntegerField(null=True, blank=True)
 
 
-class TaskGroupLayer(HistoryModel):
-    class LayerCompletionPolicy(models.TextChoices):
+class TaskFlow(HistoryModel):
+    code = models.CharField(max_length=255, null=False, blank=False, unique=True)
+    name = models.CharField(max_length=255, blank=True, default='')
+
+
+class TaskFlowStep(HistoryModel):
+    class StepCompletionPolicy(models.TextChoices):
         ALL = 'ALL', _('ALL')
         ANY = 'ANY', _('ANY')
         N = 'N', _('N')
 
+    flow = models.ForeignKey(
+        TaskFlow, on_delete=models.DO_NOTHING, null=False, related_name='steps'
+    )
     task_group = models.ForeignKey(
-        TaskGroup, on_delete=models.DO_NOTHING, null=False, related_name='layers'
+        TaskGroup, on_delete=models.DO_NOTHING, null=False, related_name='flow_steps'
     )
     order = models.PositiveSmallIntegerField(null=False)
-    code = models.CharField(max_length=255, null=False, blank=False)
     completion_policy = models.CharField(
-        max_length=50, choices=LayerCompletionPolicy.choices, null=False, blank=False
+        max_length=50, choices=StepCompletionPolicy.choices, null=False, blank=False
     )
-    required_approvals = models.PositiveSmallIntegerField(null=True, blank=True)
+    threshold = models.PositiveSmallIntegerField(null=True, blank=True)
 
     class Meta:
         ordering = ['order']
         constraints = [
             models.UniqueConstraint(
-                fields=['task_group', 'order'],
-                name='unique_task_group_layer_order',
-            ),
-            models.UniqueConstraint(
-                fields=['task_group', 'code'],
-                name='unique_task_group_layer_code',
+                fields=['flow', 'order'],
+                name='unique_task_flow_step_order',
             ),
         ]
 
@@ -68,13 +56,6 @@ class TaskGroupLayer(HistoryModel):
 class TaskExecutor(HistoryModel):
     user = models.ForeignKey(User, on_delete=models.DO_NOTHING, null=False)
     task_group = models.ForeignKey(TaskGroup, on_delete=models.DO_NOTHING, null=False)
-    task_group_layer = models.ForeignKey(
-        TaskGroupLayer,
-        on_delete=models.DO_NOTHING,
-        null=True,
-        blank=True,
-        related_name='executors',
-    )
 
 
 class Task(HistoryModel):
@@ -95,52 +76,33 @@ class Task(HistoryModel):
     task_group = models.ForeignKey(TaskGroup, on_delete=models.DO_NOTHING,  blank=True, null=True)
     data = models.JSONField(blank=True, default=dict)
     business_data_serializer = models.CharField(max_length=255, blank=True, null=True)
-    current_layer = models.ForeignKey(
-        TaskGroupLayer,
-        on_delete=models.DO_NOTHING,
-        blank=True,
-        null=True,
-        related_name='+',
+    flow = models.ForeignKey(
+        TaskFlow, on_delete=models.DO_NOTHING, blank=True, null=True, related_name='+'
     )
-    current_attempt = models.PositiveSmallIntegerField(default=1)
+    current_step = models.ForeignKey(
+        TaskFlowStep, on_delete=models.DO_NOTHING, blank=True, null=True, related_name='+'
+    )
 
 
-class TaskLayerProgress(HistoryModel):
-    class Status(models.TextChoices):
-        PENDING = 'PENDING', _('Pending')
-        ACTIVE = 'ACTIVE', _('Active')
-        APPROVED = 'APPROVED', _('Approved')
-        REJECTED = 'REJECTED', _('Rejected')
-        SUPERSEDED = 'SUPERSEDED', _('Superseded')
-
+class TaskDecision(HistoryModel):
     task = models.ForeignKey(
-        Task, on_delete=models.DO_NOTHING, null=False, related_name='layer_progress'
+        Task, on_delete=models.DO_NOTHING, null=False, related_name='decisions'
     )
-    layer = models.ForeignKey(
-        TaskGroupLayer,
-        on_delete=models.DO_NOTHING,
-        null=False,
-        related_name='progress_rows',
+    flow_step = models.ForeignKey(
+        TaskFlowStep, on_delete=models.DO_NOTHING, blank=True, null=True, related_name='+'
     )
-    attempt = models.PositiveSmallIntegerField(null=False, default=1)
-    status = models.CharField(
-        max_length=50, choices=Status.choices, default=Status.PENDING, null=False
+    user = models.ForeignKey(
+        User, on_delete=models.DO_NOTHING, null=False, related_name='+'
     )
-    activated_at = models.DateTimeField(blank=True, null=True)
-    resolved_at = models.DateTimeField(blank=True, null=True)
-    resolved_by = models.ForeignKey(
-        User,
-        on_delete=models.DO_NOTHING,
-        blank=True,
-        null=True,
-        related_name='+',
-    )
+    decision = models.CharField(max_length=50, null=False, blank=False)
+    record_id = models.CharField(max_length=255, blank=True, null=True)
+    decided_at = models.DateTimeField(null=False)
 
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=['task', 'layer', 'attempt'],
-                name='unique_task_layer_attempt',
+                fields=['task', 'flow_step', 'user', 'record_id'],
+                name='unique_decision_per_slot_user_record',
             ),
         ]
 
