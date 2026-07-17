@@ -2,6 +2,7 @@ from django.db import models
 
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
+from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
 from core.models import HistoryModel, User, UUIDModel, ObjectMutation, MutationLog
@@ -19,13 +20,46 @@ class TaskGroup(HistoryModel):
     )
     threshold = models.PositiveSmallIntegerField(null=True, blank=True)
 
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    Q(completion_policy='N', threshold__gte=1)
+                    | (~Q(completion_policy='N') & Q(threshold__isnull=True))
+                ),
+                name='task_group_threshold_matches_policy',
+            ),
+        ]
+
 
 class TaskFlow(HistoryModel):
-    code = models.CharField(max_length=255, null=False, blank=False, unique=True)
+    """
+    Reusable, ordered approval flow. Tasks reference it via Task.flow and
+    advance step by step; the group-level completion_policy only applies to
+    flat (non-flow) tasks. As a flow advances, Task.task_group is kept
+    pointing at the active step's pool so executor-based visibility and
+    filtering keep working unchanged.
+    """
+    code = models.CharField(max_length=255, null=False, blank=False)
     name = models.CharField(max_length=255, blank=True, default='')
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['code'],
+                condition=Q(is_deleted=False),
+                name='unique_task_flow_code',
+            ),
+        ]
 
 
 class TaskFlowStep(HistoryModel):
+    """
+    One ordered step of a TaskFlow, pointing at a TaskGroup used as an
+    executor pool. The step's own completion_policy/threshold decide when
+    the step completes - the pool's group-level policy is ignored inside a
+    flow, so one group can act as ALL in one flow and ANY in another.
+    """
     class StepCompletionPolicy(models.TextChoices):
         ALL = 'ALL', _('ALL')
         ANY = 'ANY', _('ANY')
@@ -48,7 +82,15 @@ class TaskFlowStep(HistoryModel):
         constraints = [
             models.UniqueConstraint(
                 fields=['flow', 'order'],
+                condition=Q(is_deleted=False),
                 name='unique_task_flow_step_order',
+            ),
+            models.CheckConstraint(
+                check=(
+                    Q(completion_policy='N', threshold__gte=1)
+                    | (~Q(completion_policy='N') & Q(threshold__isnull=True))
+                ),
+                name='task_flow_step_threshold_matches_policy',
             ),
         ]
 
@@ -77,32 +119,66 @@ class Task(HistoryModel):
     data = models.JSONField(blank=True, default=dict)
     business_data_serializer = models.CharField(max_length=255, blank=True, null=True)
     flow = models.ForeignKey(
-        TaskFlow, on_delete=models.DO_NOTHING, blank=True, null=True, related_name='+'
+        TaskFlow, on_delete=models.DO_NOTHING, blank=True, null=True, related_name='tasks'
     )
     current_step = models.ForeignKey(
-        TaskFlowStep, on_delete=models.DO_NOTHING, blank=True, null=True, related_name='+'
+        TaskFlowStep, on_delete=models.DO_NOTHING, blank=True, null=True, related_name='tasks_at_step'
     )
 
 
 class TaskDecision(HistoryModel):
+    """
+    Insert-only vote ledger: one row per (task, step, user, record) decision.
+    flow_step is NULL for flat (non-flow) tasks; record_id is NULL for
+    whole-task decisions. Rewind/amend-and-resubmit is out of scope for now;
+    when it lands, a round column joins the uniqueness key so earlier steps
+    can be re-voted.
+    """
+
+    class Decision(models.TextChoices):
+        APPROVED = 'APPROVED', _('Approved')
+        REJECTED = 'REJECTED', _('Rejected')
+        FAILED = 'FAILED', _('Failed')
+
     task = models.ForeignKey(
         Task, on_delete=models.DO_NOTHING, null=False, related_name='decisions'
     )
     flow_step = models.ForeignKey(
-        TaskFlowStep, on_delete=models.DO_NOTHING, blank=True, null=True, related_name='+'
+        TaskFlowStep, on_delete=models.DO_NOTHING, blank=True, null=True, related_name='decisions'
     )
     user = models.ForeignKey(
         User, on_delete=models.DO_NOTHING, null=False, related_name='+'
     )
-    decision = models.CharField(max_length=50, null=False, blank=False)
+    decision = models.CharField(
+        max_length=50, choices=Decision.choices, null=False, blank=False
+    )
     record_id = models.CharField(max_length=255, blank=True, null=True)
-    decided_at = models.DateTimeField(null=False)
 
     class Meta:
+        # NULLs compare distinct in unique constraints, so each NULL
+        # combination of (flow_step, record_id) needs its own partial
+        # constraint; is_deleted=False keeps a retracted vote from
+        # blocking a re-vote.
         constraints = [
             models.UniqueConstraint(
                 fields=['task', 'flow_step', 'user', 'record_id'],
-                name='unique_decision_per_slot_user_record',
+                condition=Q(is_deleted=False),
+                name='unique_decision_step_user_record',
+            ),
+            models.UniqueConstraint(
+                fields=['task', 'flow_step', 'user'],
+                condition=Q(is_deleted=False, record_id__isnull=True),
+                name='unique_decision_step_user_whole_task',
+            ),
+            models.UniqueConstraint(
+                fields=['task', 'user', 'record_id'],
+                condition=Q(is_deleted=False, flow_step__isnull=True),
+                name='unique_decision_flat_user_record',
+            ),
+            models.UniqueConstraint(
+                fields=['task', 'user'],
+                condition=Q(is_deleted=False, flow_step__isnull=True, record_id__isnull=True),
+                name='unique_decision_flat_user_whole_task',
             ),
         ]
 
