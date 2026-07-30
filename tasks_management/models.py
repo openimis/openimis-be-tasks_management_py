@@ -155,30 +155,36 @@ class TaskDecision(HistoryModel):
     record_id = models.CharField(max_length=255, blank=True, null=True)
 
     class Meta:
-        # NULLs compare distinct in unique constraints, so each NULL
-        # combination of (flow_step, record_id) needs its own partial
-        # constraint; is_deleted=False keeps a retracted vote from
-        # blocking a re-vote.
+        # NULLs compare distinct in unique constraints, so the four
+        # (flow_step, record_id) NULL combinations are partitioned into
+        # mutually exclusive partial constraints; is_deleted=False keeps
+        # a retracted vote from blocking a re-vote.
         constraints = [
             models.UniqueConstraint(
                 fields=['task', 'flow_step', 'user', 'record_id'],
-                condition=Q(is_deleted=False),
+                condition=Q(is_deleted=False, flow_step__isnull=False, record_id__isnull=False),
                 name='unique_decision_step_user_record',
             ),
             models.UniqueConstraint(
                 fields=['task', 'flow_step', 'user'],
-                condition=Q(is_deleted=False, record_id__isnull=True),
+                condition=Q(is_deleted=False, flow_step__isnull=False, record_id__isnull=True),
                 name='unique_decision_step_user_whole_task',
             ),
             models.UniqueConstraint(
                 fields=['task', 'user', 'record_id'],
-                condition=Q(is_deleted=False, flow_step__isnull=True),
+                condition=Q(is_deleted=False, flow_step__isnull=True, record_id__isnull=False),
                 name='unique_decision_flat_user_record',
             ),
             models.UniqueConstraint(
                 fields=['task', 'user'],
                 condition=Q(is_deleted=False, flow_step__isnull=True, record_id__isnull=True),
                 name='unique_decision_flat_user_whole_task',
+            ),
+            # record_id is optional (whole-task decisions) but must never be
+            # an empty string, or it would dodge the isnull partitioning above.
+            models.CheckConstraint(
+                check=Q(record_id__isnull=True) | ~Q(record_id=''),
+                name='task_decision_record_id_not_blank',
             ),
         ]
 
