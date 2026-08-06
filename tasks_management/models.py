@@ -147,6 +147,18 @@ class Task(HistoryModel):
         TaskFlowStep, on_delete=models.DO_NOTHING, blank=True, null=True, related_name='tasks_at_step'
     )
 
+    class Meta:
+        constraints = [
+            # One-directional on purpose: a finished flow task may clear its
+            # step, but a flat task must never carry one. The cross-table
+            # invariant (current_step belongs to flow) lives in the service
+            # layer.
+            models.CheckConstraint(
+                check=Q(flow__isnull=False) | Q(current_step__isnull=True),
+                name='task_current_step_requires_flow',
+            ),
+        ]
+
 
 class TaskDecision(HistoryModel):
     """
