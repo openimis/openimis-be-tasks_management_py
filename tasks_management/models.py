@@ -5,7 +5,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
-from core.models import HistoryModel, User, UUIDModel, ObjectMutation, MutationLog
+from core.models import HistoryModel, HistoryBusinessModel, User, UUIDModel, ObjectMutation, MutationLog
 
 
 class TaskGroup(HistoryModel):
@@ -32,33 +32,44 @@ class TaskGroup(HistoryModel):
         ]
 
 
-class TaskFlow(HistoryModel):
+class TaskFlow(HistoryBusinessModel):
     """
     Reusable, ordered approval flow. Tasks reference it via Task.flow and
     advance step by step; the group-level completion_policy only applies to
     flat (non-flow) tasks. As a flow advances, Task.task_group is kept
     pointing at the active step's pool so executor-based visibility and
     filtering keep working unchanged.
+
+    Versioned via HistoryBusinessModel: semantic edits must go through
+    replace_object(), which supersedes this row (replacement_uuid set,
+    further updates blocked by core) and creates a new head version, so
+    in-flight tasks keep following the version they started on. Replacing
+    a flow does not clone its steps - the service layer must re-create
+    TaskFlowStep rows for the new version.
     """
     code = models.CharField(max_length=255, null=False, blank=False)
     name = models.CharField(max_length=255, blank=True, default='')
 
     class Meta:
         constraints = [
+            # Head versions only: a superseded row keeps is_deleted=False,
+            # so scoping by is_deleted alone would false-fire on replace.
             models.UniqueConstraint(
                 fields=['code'],
-                condition=Q(is_deleted=False),
+                condition=Q(is_deleted=False, replacement_uuid__isnull=True),
                 name='unique_task_flow_code',
             ),
         ]
 
 
-class TaskFlowStep(HistoryModel):
+class TaskFlowStep(HistoryBusinessModel):
     """
     One ordered step of a TaskFlow, pointing at a TaskGroup used as an
-    executor pool. The step's own completion_policy/threshold decide when
-    the step completes - the pool's group-level policy is ignored inside a
-    flow, so one group can act as ALL in one flow and ANY in another.
+    executor pool. completion_policy/threshold are optional overrides:
+    NULL inherits the pool group's values (live read), setting them pins
+    the step's policy - so one group can act as ALL in one flow and ANY
+    in another. Versioned via HistoryBusinessModel like TaskFlow;
+    Task.current_step pins the exact step version a task is on.
     """
     class StepCompletionPolicy(models.TextChoices):
         ALL = 'ALL', _('ALL')
@@ -73,22 +84,33 @@ class TaskFlowStep(HistoryModel):
     )
     order = models.PositiveSmallIntegerField(null=False)
     completion_policy = models.CharField(
-        max_length=50, choices=StepCompletionPolicy.choices, null=False, blank=False
+        max_length=50, choices=StepCompletionPolicy.choices, null=True, blank=True
     )
     threshold = models.PositiveSmallIntegerField(null=True, blank=True)
+
+    def effective_policy(self):
+        return self.completion_policy or self.task_group.completion_policy
+
+    def effective_threshold(self):
+        return self.threshold if self.completion_policy else self.task_group.threshold
 
     class Meta:
         ordering = ['order']
         constraints = [
+            # Deliberate v1 limitation: one group per tier - parallel
+            # independent sign-offs at the same order are not supported.
             models.UniqueConstraint(
                 fields=['flow', 'order'],
-                condition=Q(is_deleted=False),
+                condition=Q(is_deleted=False, replacement_uuid__isnull=True),
                 name='unique_task_flow_step_order',
             ),
+            # CHECK passes on UNKNOWN, so every branch pins the NULLness of
+            # completion_policy; a NULL (inherit) policy carries no threshold.
             models.CheckConstraint(
                 check=(
-                    Q(completion_policy='N', threshold__gte=1)
-                    | (~Q(completion_policy='N') & Q(threshold__isnull=True))
+                    Q(completion_policy__isnull=True, threshold__isnull=True)
+                    | Q(completion_policy__isnull=False, completion_policy='N', threshold__gte=1)
+                    | Q(completion_policy__in=['ALL', 'ANY'], threshold__isnull=True)
                 ),
                 name='task_flow_step_threshold_matches_policy',
             ),
@@ -130,9 +152,12 @@ class TaskDecision(HistoryModel):
     """
     Insert-only vote ledger: one row per (task, step, user, record) decision.
     flow_step is NULL for flat (non-flow) tasks; record_id is NULL for
-    whole-task decisions. Rewind/amend-and-resubmit is out of scope for now;
-    when it lands, a round column joins the uniqueness key so earlier steps
-    can be re-voted.
+    whole-task decisions. REJECTED is a reviewer's verdict against the item
+    (per-record or whole-task); FAILED is the whole-task failure verdict kept
+    for parity with the existing business_status vocabulary - the resolver
+    maps it to complete_task(failed=True). Rewind/amend-and-resubmit is out
+    of scope for now; when it lands, a round column joins the uniqueness key
+    so earlier steps can be re-voted.
     """
 
     class Decision(models.TextChoices):
