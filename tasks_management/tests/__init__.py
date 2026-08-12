@@ -4,3 +4,4 @@ from tasks_management.tests.task_event_tests import TaskEventTestCase
 from tasks_management.tests.checker_logic_service_tests import CheckerLogicServiceTestCase
 from tasks_management.tests.flow_resolver_tests import FlowResolverTestCase
 from tasks_management.tests.flow_service_tests import FlowServiceTestCase
+from tasks_management.tests.gql_flow_tests import GqlFlowTestCase

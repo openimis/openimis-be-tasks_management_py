@@ -7,8 +7,8 @@ from core.gql.gql_mutations.base_mutation import BaseHistoryModelCreateMutationM
     BaseHistoryModelUpdateMutationMixin, BaseHistoryModelDeleteMutationMixin
 from core.schema import OpenIMISMutation
 from tasks_management.apps import TasksManagementConfig
-from tasks_management.models import TaskGroup, Task, TaskMutation
-from tasks_management.services import TaskGroupService, TaskService
+from tasks_management.models import TaskGroup, Task, TaskMutation, TaskExecutor, TaskFlow, TaskFlowStep
+from tasks_management.services import TaskGroupService, TaskService, TaskFlowService
 
 
 class CreateTaskGroupInput(OpenIMISMutation.Input):
@@ -165,10 +165,187 @@ class UpdateTaskMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
         pass
 
 
+class TaskFlowStepInput(graphene.InputObjectType):
+    class StepCompletionPolicyEnum(graphene.Enum):
+        ALL = TaskFlowStep.StepCompletionPolicy.ALL
+        ANY = TaskFlowStep.StepCompletionPolicy.ANY
+        N = TaskFlowStep.StepCompletionPolicy.N
+
+    task_group_id = graphene.UUID(required=True)
+    # Omitted/null policy = inherit the pool group's policy and threshold
+    completion_policy = graphene.Field(StepCompletionPolicyEnum, required=False)
+    threshold = graphene.Int(required=False)
+
+
+class CreateTaskFlowInput(OpenIMISMutation.Input):
+    code = graphene.String(required=True, max_length=255)
+    name = graphene.String(required=False, max_length=255)
+    task_sources = graphene.List(graphene.String)
+    steps = graphene.List(TaskFlowStepInput, required=True)
+
+
+class UpdateTaskFlowInput(CreateTaskFlowInput):
+    # Head-level, non-semantic changes: name and source binding (affects new
+    # tasks only). A modified steps payload is refused by the service - step
+    # changes go through replaceTaskFlow.
+    id = graphene.UUID(required=True)
+    steps = graphene.List(TaskFlowStepInput, required=False)
+
+
+class ReplaceTaskFlowInput(OpenIMISMutation.Input):
+    id = graphene.UUID(required=True)
+    code = graphene.String(required=False, max_length=255)
+    name = graphene.String(required=False, max_length=255)
+    task_sources = graphene.List(graphene.String)
+    steps = graphene.List(TaskFlowStepInput, required=False)
+
+
+def _steps_payload(data):
+    steps = data.pop('steps', None)
+    if steps is None:
+        return data, None
+    normalized = [
+        {
+            'task_group_id': str(step['task_group_id']),
+            'completion_policy': step.get('completion_policy'),
+            'threshold': step.get('threshold'),
+        }
+        for step in steps
+    ]
+    return data, normalized
+
+
+class CreateTaskFlowMutation(BaseHistoryModelCreateMutationMixin, BaseMutation):
+    _mutation_class = "CreateTaskFlowMutation"
+    _mutation_module = "tasks_management"
+    _model = TaskFlow
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        if type(user) is AnonymousUser or not user.has_perms(
+                TasksManagementConfig.gql_task_flow_create_perms):
+            raise ValidationError("mutation.authentication_required")
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        data.pop('client_mutation_id', None)
+        data.pop('client_mutation_label', None)
+        data, steps = _steps_payload(data)
+        response = TaskFlowService(user).create({**data, 'steps': steps or []})
+        if not response['success']:
+            return response
+        return None
+
+    class Input(CreateTaskFlowInput):
+        pass
+
+
+class UpdateTaskFlowMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
+    _mutation_class = "UpdateTaskFlowMutation"
+    _mutation_module = "tasks_management"
+    _model = TaskFlow
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        if type(user) is AnonymousUser or not user.has_perms(
+                TasksManagementConfig.gql_task_flow_update_perms):
+            raise ValidationError("mutation.authentication_required")
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        data.pop('client_mutation_id', None)
+        data.pop('client_mutation_label', None)
+        data, steps = _steps_payload(data)
+        if steps is not None:
+            data['steps'] = steps
+        response = TaskFlowService(user).update(data)
+        if not response['success']:
+            return response
+        return None
+
+    class Input(UpdateTaskFlowInput):
+        pass
+
+
+class ReplaceTaskFlowMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
+    _mutation_class = "ReplaceTaskFlowMutation"
+    _mutation_module = "tasks_management"
+    _model = TaskFlow
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        if type(user) is AnonymousUser or not user.has_perms(
+                TasksManagementConfig.gql_task_flow_update_perms):
+            raise ValidationError("mutation.authentication_required")
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        data.pop('client_mutation_id', None)
+        data.pop('client_mutation_label', None)
+        data, steps = _steps_payload(data)
+        if steps is not None:
+            data['steps'] = steps
+        response = TaskFlowService(user).replace(data)
+        if not response['success']:
+            return response
+        return None
+
+    class Input(ReplaceTaskFlowInput):
+        pass
+
+
+class DeleteTaskFlowMutation(BaseHistoryModelDeleteMutationMixin, BaseMutation):
+    _mutation_class = "DeleteTaskFlowMutation"
+    _mutation_module = "tasks_management"
+    _model = TaskFlow
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        if type(user) is AnonymousUser or not user.has_perms(
+                TasksManagementConfig.gql_task_flow_delete_perms):
+            raise ValidationError("mutation.authentication_required")
+
+    @classmethod
+    def _mutate(cls, user, **data):
+        data.pop('client_mutation_id', None)
+        data.pop('client_mutation_label', None)
+        service = TaskFlowService(user)
+        ids = data.get('ids')
+        if ids:
+            with transaction.atomic():
+                for id in ids:
+                    response = service.delete({'id': id})
+                    if not response['success']:
+                        raise ValidationError(str(response))
+
+    class Input(OpenIMISMutation.Input):
+        ids = graphene.List(graphene.UUID)
+
+
 class ResolveTaskMutation(BaseHistoryModelUpdateMutationMixin, BaseMutation):
     _mutation_class = "ResolveTaskMutation"
     _mutation_module = "tasks_management"
     _model = Task
+
+    @classmethod
+    def _validate_mutation(cls, user, **data):
+        # A resolver must be an executor of the task's current group or hold
+        # triage/admin rights - mirrors the task visibility rule. Before this
+        # check any authenticated user could submit arbitrary business_status
+        # payloads (see the flat-path hardening note in the module README).
+        if type(user) is AnonymousUser or not user.id:
+            raise ValidationError("mutation.authentication_required")
+        task = Task.objects.filter(id=data.get('id')).first()
+        if not task:
+            return
+        from tasks_management.gql_queries import is_task_triage
+        if getattr(user, 'is_imis_admin', False) or is_task_triage(user):
+            return
+        is_executor = task.task_group_id and TaskExecutor.objects.filter(
+            task_group_id=task.task_group_id, user_id=user.id, is_deleted=False,
+        ).exists()
+        if not is_executor:
+            raise ValidationError("mutation.authentication_required")
 
     @classmethod
     def _mutate(cls, user, **data):

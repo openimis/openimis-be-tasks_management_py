@@ -9,7 +9,7 @@ from graphene_django import DjangoObjectType
 from core import ExtendedConnection, prefix_filterset
 from core.gql_queries import UserGQLType
 from tasks_management.apps import TasksManagementConfig
-from tasks_management.models import TaskGroup, TaskExecutor, Task
+from tasks_management.models import TaskGroup, TaskExecutor, Task, TaskFlow, TaskFlowStep, TaskDecision
 
 DICT_STRING = "{}"
 
@@ -191,3 +191,99 @@ class TaskExecutorGQLType(DjangoObjectType):
             "version": ["exact"],
         }
         connection_class = ExtendedConnection
+
+
+class TaskFlowStepGQLType(DjangoObjectType):
+    uuid = graphene.String(source='uuid')
+    # Resolved inherit-or-override values so the FE can render
+    # "Inherit (ALL)" without re-implementing the inheritance rule.
+    effective_policy = graphene.String()
+    effective_threshold = graphene.Int()
+
+    class Meta:
+        model = TaskFlowStep
+        interfaces = (graphene.relay.Node,)
+        filter_fields = {
+            "id": ["exact"],
+            "order": ["exact"],
+            "completion_policy": ["exact", "iexact"],
+            "is_deleted": ["exact"],
+            "version": ["exact"],
+        }
+        connection_class = ExtendedConnection
+
+    def resolve_effective_policy(self, info):
+        return self.effective_policy()
+
+    def resolve_effective_threshold(self, info):
+        return self.effective_threshold()
+
+
+class TaskFlowGQLType(DjangoObjectType):
+    uuid = graphene.String(source='uuid')
+    task_sources = graphene.List(graphene.String)
+    steps = graphene.List(TaskFlowStepGQLType)
+    step_count = graphene.Int()
+    in_flight_count = graphene.Int()
+
+    class Meta:
+        model = TaskFlow
+        interfaces = (graphene.relay.Node,)
+        filter_fields = {
+            "id": ["exact"],
+            "code": ["exact", "iexact", "startswith", "istartswith", "contains", "icontains"],
+            "name": ["exact", "iexact", "startswith", "istartswith", "contains", "icontains"],
+            "date_created": ["exact", "lt", "lte", "gt", "gte"],
+            "date_updated": ["exact", "lt", "lte", "gt", "gte"],
+            "date_valid_from": ["exact", "lt", "lte", "gt", "gte"],
+            "date_valid_to": ["exact", "lt", "lte", "gt", "gte", "isnull"],
+            "replacement_uuid": ["exact", "isnull"],
+            "is_deleted": ["exact"],
+            "version": ["exact"],
+        }
+        connection_class = ExtendedConnection
+
+    def resolve_task_sources(self, info):
+        return (self.json_ext or {}).get('task_sources', [])
+
+    def resolve_steps(self, info):
+        return self.steps.filter(is_deleted=False).select_related('task_group').order_by('order')
+
+    def resolve_step_count(self, info):
+        return self.steps.filter(is_deleted=False).count()
+
+    def resolve_in_flight_count(self, info):
+        return Task.objects.filter(
+            flow_id=self.id, is_deleted=False,
+            status__in=[Task.Status.RECEIVED, Task.Status.ACCEPTED],
+        ).count()
+
+
+class TaskDecisionGQLType(DjangoObjectType):
+    uuid = graphene.String(source='uuid')
+
+    class Meta:
+        model = TaskDecision
+        interfaces = (graphene.relay.Node,)
+        filter_fields = {
+            "id": ["exact"],
+            "decision": ["exact", "iexact"],
+            "record_id": ["exact", "isnull"],
+            "date_created": ["exact", "lt", "lte", "gt", "gte"],
+            "is_deleted": ["exact"],
+            **prefix_filterset("task__", TaskGQLType._meta.filter_fields),
+        }
+        connection_class = ExtendedConnection
+
+    @classmethod
+    def get_queryset(cls, queryset, info):
+        # Same visibility rule as tasks: privileged users see everything,
+        # executors see the decisions of tasks assigned to their groups.
+        user = info.context.user
+        if user.is_imis_admin or is_task_triage(user):
+            return queryset.filter(is_deleted=False)
+        return queryset.filter(
+            Q(task__task_group__taskexecutor__user=user)
+            & ~Q(task__status=Task.Status.RECEIVED),
+            is_deleted=False,
+        )
