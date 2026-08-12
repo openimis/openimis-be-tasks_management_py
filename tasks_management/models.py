@@ -192,6 +192,12 @@ class TaskDecision(HistoryModel):
     record_id = models.CharField(max_length=255, blank=True, null=True)
 
     class Meta:
+        # Step evaluation reads all decisions for (task, current_step) on
+        # every vote; the partial unique indexes below don't serve that
+        # lookup, so it gets a plain index.
+        indexes = [
+            models.Index(fields=['task', 'flow_step'], name='idx_task_decision_task_step'),
+        ]
         # NULLs compare distinct in unique constraints, so the four
         # (flow_step, record_id) NULL combinations are partitioned into
         # mutually exclusive partial constraints; is_deleted=False keeps
