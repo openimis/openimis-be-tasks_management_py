@@ -10,13 +10,15 @@ from django.db import transaction
 
 from core.datetimes.ad_datetime import AdDate, AdDatetime
 from core.forms import User
+from core.models import HistoryModel
 from core.services import BaseService
 from core.signals import register_service_signal
 from core.services.utils import check_authentication, output_exception, output_result_success, model_representation
 from core.utils import to_json_safe_value
 from tasks_management.apps import TasksManagementConfig
-from tasks_management.models import TaskGroup, TaskExecutor, Task
-from tasks_management.validation import TaskGroupValidation, TaskExecutorValidation, TaskValidation
+from tasks_management.models import TaskGroup, TaskExecutor, Task, TaskFlow, TaskFlowStep
+from tasks_management.validation import TaskGroupValidation, TaskExecutorValidation, TaskValidation, \
+    TaskFlowValidation
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +33,69 @@ class TaskService(BaseService):
     @register_service_signal('task_service.create')
     def create(self, obj_data):
         source = obj_data.get('source')
+        flow = self._match_flow_for_source(source, obj_data)
+        if flow:
+            first_step = flow.steps.filter(is_deleted=False).order_by('order').first()
+            if first_step:
+                logger.info(
+                    "tasks_management.flow: assigning task from source '%s' to flow "
+                    "'%s' (version %s), step 1 pool '%s'",
+                    source, flow.code, flow.id, first_step.task_group.code,
+                )
+                obj_data = {
+                    **obj_data,
+                    "flow": flow,
+                    "current_step": first_step,
+                    "task_group": first_step.task_group,
+                    "status": Task.Status.ACCEPTED,
+                }
+                return super().create(obj_data)
+            logger.error(
+                "tasks_management.flow: flow '%s' matched source '%s' but has no "
+                "steps; falling back to group binding", flow.code, source,
+            )
         task_group_query = TaskGroup.objects.filter(json_ext__contains={"task_sources": [source]})
         if task_group_query:
             obj_data = {**obj_data, "task_group": task_group_query.first(), "status": Task.Status.ACCEPTED}
         return super().create(obj_data)
 
+    def _match_flow_for_source(self, source, obj_data):
+        if not source or source in (TasksManagementConfig.flow_ineligible_sources or []):
+            return None
+        executor_event = obj_data.get('executor_action_event')
+        if executor_event != TasksManagementConfig.default_executor_event:
+            # Flows only advance through the generic resolver; tasks with a
+            # custom executor event would assign a flow and then never move.
+            flow_bound = TaskFlow.objects.filter(
+                json_ext__contains={"task_sources": [source]},
+                is_deleted=False, replacement_uuid__isnull=True,
+            ).exists()
+            if flow_bound:
+                logger.error(
+                    "tasks_management.flow: source '%s' is flow-bound but the task "
+                    "carries executor_action_event '%s' (not the default); ignoring "
+                    "the flow binding", source, executor_event,
+                )
+            return None
+        # Head versions only - superseded versions keep serving their pinned
+        # in-flight tasks but never receive new ones.
+        return TaskFlow.objects.filter(
+            json_ext__contains={"task_sources": [source]},
+            is_deleted=False, replacement_uuid__isnull=True,
+        ).first()
+
     @register_service_signal('task_service.update')
     def update(self, obj_data):
+        task = self.OBJECT_TYPE.objects.filter(id=obj_data.get('id')).first()
+        if task and task.flow_id:
+            incoming_group = obj_data.get('task_group_id', obj_data.get('task_group'))
+            incoming_group_id = getattr(incoming_group, 'id', incoming_group)
+            if incoming_group_id and str(incoming_group_id) != str(task.task_group_id):
+                raise ValidationError(
+                    "tasks_management.flow: task '%s' belongs to flow '%s' - its "
+                    "group is managed by step advancement and cannot be reassigned"
+                    % (task.id, task.flow.code)
+                )
         return super().update(obj_data)
 
     @register_service_signal('task_service.delete')
@@ -160,12 +218,38 @@ class TaskGroupService(BaseService):
             for user_id in user_ids:
                 service.create({'task_group_id': task_group.id,
                                 'user_id': user_id})
+            if not user_ids and TaskFlowStep.objects.filter(
+                task_group=task_group, is_deleted=False,
+                flow__is_deleted=False, flow__replacement_uuid__isnull=True,
+            ).exists():
+                logger.warning(
+                    "tasks_management.flow: task group '%s' is a flow step pool and "
+                    "now has no executors - flow tasks reaching that step will hold "
+                    "until the pool is refilled", task_group.code,
+                )
         except Exception as exc:
             raise exc
 
     def delete(self, obj_data: Dict[str, any]):
         id = obj_data.get("id")
         if id:
+            head_step_ref = TaskFlowStep.objects.filter(
+                task_group_id=id, is_deleted=False,
+                flow__is_deleted=False, flow__replacement_uuid__isnull=True,
+            ).select_related('flow').first()
+            in_flight_ref = Task.objects.filter(
+                current_step__task_group_id=id, is_deleted=False,
+                status__in=[Task.Status.RECEIVED, Task.Status.ACCEPTED],
+            ).exists()
+            if head_step_ref or in_flight_ref:
+                flow_code = head_step_ref.flow.code if head_step_ref else 'a superseded version with in-flight tasks'
+                return output_exception(
+                    model_name=self.OBJECT_TYPE.__name__, method="delete",
+                    exception=ValidationError(
+                        "tasks_management.flow: task group is used as a step pool by "
+                        "flow '%s' - remove the step or replace the flow first" % flow_code
+                    ),
+                )
             task_group = TaskGroup.objects.filter(id=id).first()
             task_group.taskexecutor_set.all().delete()
         return super().delete(obj_data)
@@ -182,6 +266,184 @@ class TaskExecutorService(BaseService):
 
     def __init__(self, user, validation_class=TaskExecutorValidation):
         super().__init__(user, validation_class)
+
+
+class TaskFlowService(BaseService):
+    OBJECT_TYPE: Type[TaskFlow] = TaskFlow
+
+    def __init__(self, user, validation_class=TaskFlowValidation):
+        super().__init__(user, validation_class)
+
+    @check_authentication
+    def create(self, obj_data: Dict[str, any]):
+        try:
+            with transaction.atomic():
+                steps = obj_data.pop('steps', None) or []
+                task_sources = obj_data.pop('task_sources', None) or []
+                self.validation_class.validate_create(
+                    self.user, **obj_data, steps=steps, task_sources=task_sources)
+                obj_data = {**obj_data, "json_ext": {"task_sources": list(task_sources)}}
+                flow = self.OBJECT_TYPE(**obj_data)
+                output = self.save_instance(flow)
+                self._create_steps(flow, steps)
+                return output
+        except Exception as exc:
+            return output_exception(model_name=self.OBJECT_TYPE.__name__, method="create", exception=exc)
+
+    @check_authentication
+    def update(self, obj_data: Dict[str, any]):
+        """
+        Head-level, non-semantic changes only: name and source binding (which
+        affects new tasks exclusively). A modified steps payload is refused -
+        step changes are semantic and must go through replace() so in-flight
+        tasks keep their pinned version.
+        """
+        try:
+            with transaction.atomic():
+                steps = obj_data.pop('steps', None)
+                task_sources = obj_data.pop('task_sources', None)
+                flow = self.OBJECT_TYPE.objects.get(id=obj_data['id'])
+                if flow.replacement_uuid:
+                    raise ValidationError(
+                        "tasks_management.flow: this flow version is superseded and "
+                        "cannot be updated")
+                if steps is not None and self._steps_differ(flow, steps):
+                    raise ValidationError(
+                        "tasks_management.flow: steps changed - use replaceTaskFlow "
+                        "to create a new version; update only covers name and "
+                        "source binding")
+                if task_sources is None:
+                    task_sources = (flow.json_ext or {}).get('task_sources', [])
+                self.validation_class.validate_update(
+                    self.user, **obj_data, task_sources=task_sources)
+                json_ext = flow.json_ext if flow.json_ext else dict()
+                obj_data = {**obj_data, "json_ext": {**json_ext, "task_sources": list(task_sources)}}
+                return super().update(obj_data)
+        except Exception as exc:
+            return output_exception(model_name=self.OBJECT_TYPE.__name__, method="update", exception=exc)
+
+    @check_authentication
+    def replace(self, obj_data: Dict[str, any]):
+        """
+        Semantic edit: creates a new head version and supersedes this one.
+        Deliberately NOT core's replace_object(): that saves the new head
+        before superseding the old row, transiently violating the head-scoped
+        unique_task_flow_code constraint. Here the old head is superseded
+        FIRST, then the new head is low-level inserted with a pre-generated
+        pk, then the steps are re-created against it - one transaction.
+        In-flight tasks keep following their pinned version.
+        """
+        try:
+            with transaction.atomic():
+                old_flow = self.OBJECT_TYPE.objects.get(id=obj_data['id'])
+                if old_flow.replacement_uuid:
+                    raise ValidationError(
+                        "tasks_management.flow: this flow version is already superseded")
+                steps = obj_data.pop('steps', None)
+                if steps is None:
+                    steps = self._current_step_payloads(old_flow)
+                task_sources = obj_data.pop('task_sources', None)
+                if task_sources is None:
+                    task_sources = (old_flow.json_ext or {}).get('task_sources', [])
+                code = obj_data.get('code') or old_flow.code
+                name = obj_data.get('name', old_flow.name)
+                self.validation_class.validate_replace(
+                    self.user, id=str(old_flow.id), code=code, steps=steps,
+                    task_sources=task_sources)
+
+                now = datetime.datetime.now()
+                new_id = uuid.uuid4()
+                old_flow.replacement_uuid = new_id
+                old_flow.date_valid_to = now
+                old_flow.save(username=self.user.login_name)
+
+                new_flow = self.OBJECT_TYPE(
+                    id=new_id, code=code, name=name,
+                    json_ext={"task_sources": list(task_sources)},
+                    date_valid_from=now,
+                    date_created=now, date_updated=now,
+                    user_created=self.user, user_updated=self.user,
+                    version=1,
+                )
+                # HistoryModel.save treats a preset pk as an update; insert at
+                # the plain-Model level (simple-history still records via its
+                # post_save receiver).
+                super(HistoryModel, new_flow).save(force_insert=True)
+                self._create_steps(new_flow, steps)
+                logger.info(
+                    "tasks_management.flow: flow '%s' replaced - version %s "
+                    "superseded by %s", code, old_flow.id, new_id,
+                )
+                return {
+                    "success": True,
+                    "message": "Ok",
+                    "detail": "",
+                    "old_object": str(old_flow.id),
+                    "uuid_new_object": str(new_id),
+                }
+        except Exception as exc:
+            return output_exception(model_name=self.OBJECT_TYPE.__name__, method="replace", exception=exc)
+
+    def delete(self, obj_data: Dict[str, any]):
+        try:
+            with transaction.atomic():
+                flow = self.OBJECT_TYPE.objects.get(id=obj_data['id'])
+                in_flight = Task.objects.filter(
+                    flow=flow, is_deleted=False,
+                    status__in=[Task.Status.RECEIVED, Task.Status.ACCEPTED],
+                ).count()
+                if in_flight:
+                    raise ValidationError(
+                        "tasks_management.flow: flow '%s' has %s task(s) still in "
+                        "review - resolve them before deleting the flow"
+                        % (flow.code, in_flight))
+                sources = (flow.json_ext or {}).get('task_sources', [])
+                if sources and not flow.replacement_uuid:
+                    logger.warning(
+                        "tasks_management.flow: deleting flow '%s' leaves source(s) "
+                        "%s unbound - new tasks from them will sit in RECEIVED with "
+                        "no task group; rebind them to a group or another flow",
+                        flow.code, sources,
+                    )
+                for step in flow.steps.filter(is_deleted=False):
+                    step.delete(username=self.user.login_name)
+                return super().delete(obj_data)
+        except Exception as exc:
+            return output_exception(model_name=self.OBJECT_TYPE.__name__, method="delete", exception=exc)
+
+    def _create_steps(self, flow, steps):
+        for position, step_data in enumerate(steps, start=1):
+            step = TaskFlowStep(
+                flow=flow,
+                task_group_id=step_data['task_group_id'],
+                order=position,
+                completion_policy=step_data.get('completion_policy'),
+                threshold=step_data.get('threshold'),
+            )
+            step.save(username=self.user.login_name)
+
+    @staticmethod
+    def _current_step_payloads(flow):
+        return [
+            {
+                'task_group_id': step.task_group_id,
+                'completion_policy': step.completion_policy,
+                'threshold': step.threshold,
+            }
+            for step in flow.steps.filter(is_deleted=False).order_by('order')
+        ]
+
+    @classmethod
+    def _steps_differ(cls, flow, steps):
+        current = [
+            (str(s['task_group_id']), s['completion_policy'], s['threshold'])
+            for s in cls._current_step_payloads(flow)
+        ]
+        incoming = [
+            (str(s.get('task_group_id')), s.get('completion_policy'), s.get('threshold'))
+            for s in steps
+        ]
+        return current != incoming
 
 
 class CreateCheckerLogicServiceMixin(ABC):

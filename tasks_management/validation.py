@@ -6,7 +6,8 @@ from django.contrib.contenttypes.models import ContentType
 from core.models import User
 from core.validation import BaseModelValidation, UniqueCodeValidationMixin, ObjectExistsValidationMixin, \
     StringFieldValidationMixin
-from tasks_management.models import TaskGroup, TaskExecutor, Task
+from tasks_management.apps import TasksManagementConfig
+from tasks_management.models import TaskGroup, TaskExecutor, Task, TaskFlow, TaskFlowStep
 
 
 class TaskGroupValidation(BaseModelValidation, UniqueCodeValidationMixin, ObjectExistsValidationMixin,
@@ -131,15 +132,27 @@ def validate_existing_task(data):
     return []
 
 
-def validate_unique_task_source(task_sources, group_id=None):
+def validate_unique_task_source(task_sources, group_id=None, flow_id=None):
+    """
+    A source may bind to at most one of (TaskGroup, TaskFlow head version) so
+    task assignment stays deterministic. group_id/flow_id exclude the entity
+    being edited (or, for flows, the version being replaced).
+    """
     task_groups_by_source = {}
 
     queryset = TaskGroup.objects.filter(is_deleted=False)
     if group_id:
         queryset = queryset.exclude(id=group_id)
+    # Head versions only: superseded flow versions keep their json_ext but no
+    # longer participate in binding (see TaskService.create).
+    flow_queryset = TaskFlow.objects.filter(is_deleted=False, replacement_uuid__isnull=True)
+    if flow_id:
+        flow_queryset = flow_queryset.exclude(id=flow_id)
 
     for task_source in task_sources:
         instance = queryset.filter(json_ext__contains={"task_sources": [task_source]}).first()
+        if not instance:
+            instance = flow_queryset.filter(json_ext__contains={"task_sources": [task_source]}).first()
         if instance:
             task_groups_by_source[task_source] = instance.code
 
@@ -147,3 +160,99 @@ def validate_unique_task_source(task_sources, group_id=None):
         return [{"message": _("tasks_management.validation.validate_unique_task_source") % {
             'task_groups_by_source': task_groups_by_source}}]
     return []
+
+
+class TaskFlowValidation(BaseModelValidation, ObjectExistsValidationMixin):
+    OBJECT_TYPE = TaskFlow
+
+    @classmethod
+    def validate_create(cls, user, **data):
+        errors = validate_task_flow(data)
+        if errors:
+            raise ValidationError(errors)
+
+    @classmethod
+    def validate_update(cls, user, **data):
+        cls.validate_object_exists(data.get('id'))
+        errors = validate_task_flow(data, flow_id=data.get('id'))
+        if errors:
+            raise ValidationError(errors)
+
+    @classmethod
+    def validate_replace(cls, user, **data):
+        cls.validate_object_exists(data.get('id'))
+        errors = validate_task_flow(data, flow_id=data.get('id'))
+        if errors:
+            raise ValidationError(errors)
+
+
+def validate_task_flow(data, flow_id=None):
+    errors = [*validate_not_empty_field(data.get('code'), 'code')]
+
+    code = data.get('code')
+    if code:
+        head = TaskFlow.objects.filter(
+            code=code, is_deleted=False, replacement_uuid__isnull=True,
+        )
+        if flow_id:
+            head = head.exclude(id=flow_id)
+        if head.exists():
+            errors.append({"message": _(
+                "tasks_management.validation.task_flow.code_exists") % {'code': code}})
+
+    task_sources = data.get('task_sources') or []
+    ineligible = [s for s in task_sources
+                  if s in (TasksManagementConfig.flow_ineligible_sources or [])]
+    if ineligible:
+        errors.append({"message": _(
+            "tasks_management.validation.task_flow.ineligible_sources"
+        ) % {'sources': ", ".join(ineligible)}})
+    if task_sources:
+        errors.extend(validate_unique_task_source(task_sources, flow_id=flow_id))
+
+    steps = data.get('steps')
+    if steps is not None:
+        errors.extend(validate_task_flow_steps(steps))
+    return errors
+
+
+def validate_task_flow_steps(steps):
+    errors = []
+    if not steps:
+        errors.append({"message": _("tasks_management.validation.task_flow.no_steps")})
+        return errors
+    for position, step in enumerate(steps, start=1):
+        group = TaskGroup.objects.filter(
+            id=step.get('task_group_id'), is_deleted=False,
+        ).first()
+        if not group:
+            errors.append({"message": _(
+                "tasks_management.validation.task_flow.step_group_missing") % {'order': position}})
+            continue
+        pool_size = group.taskexecutor_set.filter(is_deleted=False).count()
+        if pool_size == 0:
+            errors.append({"message": _(
+                "tasks_management.validation.task_flow.step_pool_empty"
+            ) % {'order': position, 'group': group.code}})
+        policy = step.get('completion_policy')
+        threshold = step.get('threshold')
+        valid_policies = [None, *TaskFlowStep.StepCompletionPolicy.values]
+        if policy not in valid_policies:
+            errors.append({"message": _(
+                "tasks_management.validation.task_flow.step_policy_invalid"
+            ) % {'order': position, 'policy': policy}})
+            continue
+        effective_policy = policy or group.completion_policy
+        effective_threshold = threshold if policy else group.threshold
+        if policy == TaskFlowStep.StepCompletionPolicy.N and not threshold:
+            errors.append({"message": _(
+                "tasks_management.validation.task_flow.step_threshold_required") % {'order': position}})
+        if policy != TaskFlowStep.StepCompletionPolicy.N and threshold is not None:
+            errors.append({"message": _(
+                "tasks_management.validation.task_flow.step_threshold_forbidden") % {'order': position}})
+        if (effective_policy == TaskFlowStep.StepCompletionPolicy.N
+                and effective_threshold and pool_size and effective_threshold > pool_size):
+            errors.append({"message": _(
+                "tasks_management.validation.task_flow.step_threshold_exceeds_pool"
+            ) % {'order': position, 'threshold': effective_threshold, 'pool': pool_size}})
+    return errors

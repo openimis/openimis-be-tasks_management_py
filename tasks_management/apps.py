@@ -14,6 +14,15 @@ DEFAULT_CONFIG = {
     # To be used if task should use generic resolver
     "default_executor_event": "default",
     "task_user_approved": "APPROVED",
+    # Sources whose tasks are resolved per-record by consumer modules at
+    # resolve time (individual/social_protection imports, claim sampling).
+    # Flows must not bind to them: their business logic executes on the
+    # first vote, which would bypass every later step.
+    "flow_ineligible_sources": [
+        "import_valid_items",
+        "import_group_valid_items",
+        "claim_sampling",
+    ],
 }
 
 
@@ -32,6 +41,7 @@ class TasksManagementConfig(AppConfig):
     gql_task_search_all_perms = None
     default_executor_event = None
     task_user_approved = None
+    flow_ineligible_sources = None
 
     def ready(self):
         from core.models import ModuleConfiguration

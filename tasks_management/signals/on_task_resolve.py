@@ -202,6 +202,30 @@ def _evaluate_step(_task, _step, _user):
     return None
 
 
+def re_evaluate_flow_task(_task_id, _user):
+    """
+    Ops re-evaluation of a flow task's current step without recording a vote.
+    Used by the re_evaluate_task_step management command, e.g. after refilling
+    an emptied executor pool, so held tasks resume without a synthetic re-vote.
+    """
+    outcome = None
+    with transaction.atomic():
+        _task = Task.objects.select_for_update(of=('self',)).select_related(
+            'current_step__task_group', 'current_step', 'flow',
+        ).get(id=_task_id)
+        if _task.status != Task.Status.ACCEPTED or not _task.flow_id or not _task.current_step_id:
+            logger.warning(
+                "tasks_management.flow: task %s is not an in-review flow task; "
+                "nothing to re-evaluate", _task_id,
+            )
+            return
+        outcome = _evaluate_step(_task, _task.current_step, _user)
+    if outcome == 'failed':
+        TaskService(_user).complete_task({"id": _task_id, 'failed': True})
+    elif outcome == 'completed':
+        TaskService(_user).complete_task({"id": _task_id})
+
+
 def resolve_flow_task(_task_id, _user, _verdict):
     """
     Flow branch of task resolution. Vote recording, step evaluation and
