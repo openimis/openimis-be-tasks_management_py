@@ -353,6 +353,11 @@ class TaskFlowService(BaseService):
 
                 now = datetime.datetime.now()
                 new_id = uuid.uuid4()
+                # Continue the lineage counter: the visible "version" keeps
+                # incrementing across replaces instead of resetting to 1 on
+                # every new head row. Captured before the supersede save below
+                # bumps the old row's own counter.
+                new_version = old_flow.version + 1
                 old_flow.replacement_uuid = new_id
                 old_flow.date_valid_to = now
                 old_flow.save(username=self.user.login_name)
@@ -363,7 +368,7 @@ class TaskFlowService(BaseService):
                     date_valid_from=now,
                     date_created=now, date_updated=now,
                     user_created=self.user, user_updated=self.user,
-                    version=1,
+                    version=new_version,
                 )
                 # HistoryModel.save treats a preset pk as an update; insert at
                 # the plain-Model level (simple-history still records via its
