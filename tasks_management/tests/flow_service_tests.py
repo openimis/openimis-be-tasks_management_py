@@ -191,6 +191,41 @@ class FlowServiceTestCase(TestCase):
 
     # ---------------------------------------------------------------- delete
 
+    def test_delete_retires_superseded_versions(self):
+        group = self._group('fs_delrep_g')
+        flow = self._create_flow('FS_DELREP', group, task_sources=['FsDelRepSource'])
+
+        replaced = self.service.replace({
+            'id': str(flow.id),
+            'steps': [{'task_group_id': str(group.id), 'completion_policy': None, 'threshold': None}],
+        })
+        self.assertTrue(replaced.get('success'), replaced)
+        head = TaskFlow.objects.get(id=replaced['uuid_new_object'])
+
+        # Deleting the head must retire the whole lineage. Core's
+        # HistoryModel.delete un-links the predecessor of a deleted row, which
+        # would otherwise promote the superseded version back to head and
+        # violate the head-scoped unique code index.
+        result = self.service.delete({'id': str(head.id)})
+        self.assertTrue(result.get('success'), result)
+
+        head.refresh_from_db()
+        flow.refresh_from_db()
+        self.assertTrue(head.is_deleted)
+        self.assertTrue(flow.is_deleted)
+        # No live head is left holding the code, so it can be reused.
+        self.assertFalse(
+            TaskFlow.objects.filter(
+                code='FS_DELREP', is_deleted=False, replacement_uuid__isnull=True,
+            ).exists(),
+        )
+        recreated = self.service.create({
+            'code': 'FS_DELREP', 'name': 'recreated',
+            'task_sources': ['FsDelRepSource'],
+            'steps': [{'task_group_id': str(group.id), 'completion_policy': None, 'threshold': None}],
+        })
+        self.assertTrue(recreated.get('success'), recreated)
+
     def test_delete_blocked_by_in_flight_tasks_then_allowed(self):
         group = self._group('fs_del_g')
         flow = self._create_flow('FS_DEL', group)

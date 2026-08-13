@@ -412,9 +412,41 @@ class TaskFlowService(BaseService):
                     )
                 for step in flow.steps.filter(is_deleted=False):
                     step.delete(username=self.user.login_name)
+                self._retire_superseded_versions(flow)
                 return super().delete(obj_data)
         except Exception as exc:
             return output_exception(model_name=self.OBJECT_TYPE.__name__, method="delete", exception=exc)
+
+    def _retire_superseded_versions(self, flow):
+        """
+        Soft-delete the whole superseded lineage behind `flow`.
+
+        Deleting a flow retires its code, not just the current version.
+        Without this, core's HistoryModel.delete() clears replacement_uuid on
+        the row pointing at the deleted one ("so a new replacement could be
+        generated") - which would promote the previous version back to head:
+        new tasks would silently start routing through an old definition, and
+        the head-scoped unique_task_flow_code index would be violated while
+        both rows are momentarily live. Retiring predecessors first keeps
+        them excluded from that index (it covers non-deleted rows only), so
+        core's un-linking becomes a no-op on already-retired rows.
+        """
+        seen = set()
+        current = flow
+        while True:
+            predecessor = self.OBJECT_TYPE.objects.filter(
+                replacement_uuid=current.id, is_deleted=False,
+            ).first()
+            if not predecessor or predecessor.id in seen:
+                return
+            seen.add(predecessor.id)
+            predecessor.is_deleted = True
+            # HistoryModel.save refuses to update a replaced row ("you cannot
+            # update replaced entity"), so retire it at the plain-Model level
+            # exactly as replace() inserts the new head (simple-history still
+            # records it through its post_save receiver).
+            super(HistoryModel, predecessor).save(update_fields=['is_deleted'])
+            current = predecessor
 
     def _create_steps(self, flow, steps):
         for position, step_data in enumerate(steps, start=1):
