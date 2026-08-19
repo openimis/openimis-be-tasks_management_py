@@ -1,3 +1,5 @@
+import uuid
+
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.test import TestCase
@@ -6,6 +8,7 @@ from core.test_helpers import create_test_interactive_user
 from tasks_management.apps import TasksManagementConfig
 from tasks_management.models import (
     Task,
+    TaskDecision,
     TaskExecutor,
     TaskFlow,
     TaskFlowStep,
@@ -301,6 +304,143 @@ class FlowServiceTestCase(TestCase):
             TaskService(self.admin).update({
                 'id': task.id, 'task_group_id': str(other_group.id),
             })
+
+    # -------------------------------------------------- manual flow assignment
+
+    def _flat_task(self, source, group, status=Task.Status.RECEIVED):
+        task = Task(
+            source=source, status=status,
+            executor_action_event=TasksManagementConfig.default_executor_event,
+            business_status={}, data={}, task_group=group,
+        )
+        task.save(username=self.admin.username)
+        return task
+
+    def test_assign_flow_to_existing_task(self):
+        pool = self._group('fs_asgn_pool')
+        landing = self._group('fs_asgn_landing', executors=[self.exec_b])
+        flow = self._create_flow('FS_ASGN', pool)
+        step = flow.steps.get()
+        task = self._flat_task('FsAsgnSource', landing)
+
+        result = TaskService(self.admin).update({'id': task.id, 'flow_id': str(flow.id)})
+        self.assertTrue(result.get('success'), result)
+
+        task.refresh_from_db()
+        self.assertEqual(task.flow_id, flow.id)
+        self.assertEqual(task.current_step_id, step.id)
+        # the group follows the step, not whatever the task carried before
+        self.assertEqual(task.task_group_id, pool.id)
+        self.assertEqual(task.status, Task.Status.ACCEPTED)
+
+    def test_assign_flow_ignores_a_group_sent_on_the_same_payload(self):
+        pool = self._group('fs_asgn2_pool')
+        other = self._group('fs_asgn2_other', executors=[self.exec_b])
+        flow = self._create_flow('FS_ASGN2', pool)
+        task = self._flat_task('FsAsgn2Source', other)
+
+        result = TaskService(self.admin).update({
+            'id': task.id, 'flow_id': str(flow.id), 'task_group_id': str(other.id),
+        })
+        self.assertTrue(result.get('success'), result)
+        task.refresh_from_db()
+        self.assertEqual(task.task_group_id, pool.id)
+
+    def test_assign_flow_rejects_unassignable_flows(self):
+        pool = self._group('fs_asgn3_pool')
+        flow = self._create_flow('FS_ASGN3', pool)
+        task = self._flat_task('FsAsgn3Source', pool)
+        service = TaskService(self.admin)
+
+        # unknown flow
+        with self.assertRaises(ValidationError):
+            service.update({'id': task.id, 'flow_id': str(uuid.uuid4())})
+
+        # a flow with no steps cannot take tasks on
+        stepless = TaskFlow(code='FS_ASGN3_EMPTY', name='empty')
+        stepless.save(username=self.admin.username)
+        with self.assertRaises(ValidationError):
+            service.update({'id': task.id, 'flow_id': str(stepless.id)})
+
+        # superseded versions keep their pinned tasks but take on no new ones
+        replaced = self.service.replace({
+            'id': str(flow.id),
+            'steps': [{'task_group_id': str(pool.id), 'completion_policy': None, 'threshold': None}],
+        })
+        self.assertTrue(replaced.get('success'), replaced)
+        with self.assertRaises(ValidationError):
+            service.update({'id': task.id, 'flow_id': str(flow.id)})
+
+        task.refresh_from_db()
+        self.assertIsNone(task.flow_id)
+
+    def test_assign_flow_rejected_for_closed_task(self):
+        pool = self._group('fs_asgn4_pool')
+        flow = self._create_flow('FS_ASGN4', pool)
+        task = self._flat_task('FsAsgn4Source', pool, status=Task.Status.COMPLETED)
+
+        with self.assertRaises(ValidationError):
+            TaskService(self.admin).update({'id': task.id, 'flow_id': str(flow.id)})
+
+    def test_assign_flow_rejected_once_decisions_exist(self):
+        pool = self._group('fs_asgn5_pool')
+        flow = self._create_flow('FS_ASGN5', pool)
+        other_flow = self._create_flow('FS_ASGN5B', pool)
+        task = self._flat_task('FsAsgn5Source', pool, status=Task.Status.ACCEPTED)
+        TaskDecision(
+            task=task, user=self.exec_a, decision=TaskDecision.Decision.APPROVED,
+        ).save(username=self.admin.username)
+
+        service = TaskService(self.admin)
+        with self.assertRaises(ValidationError):
+            service.update({'id': task.id, 'flow_id': str(flow.id)})
+        with self.assertRaises(ValidationError):
+            service.update({'id': task.id, 'flow_id': str(other_flow.id)})
+
+    def test_detach_flow_returns_task_to_flat(self):
+        pool = self._group('fs_det_pool')
+        flow = self._create_flow('FS_DET', pool)
+        step = flow.steps.get()
+        task = Task(
+            source='FsDetSource', status=Task.Status.ACCEPTED,
+            executor_action_event=TasksManagementConfig.default_executor_event,
+            business_status={}, data={},
+            flow=flow, current_step=step, task_group=pool,
+        )
+        task.save(username=self.admin.username)
+
+        result = TaskService(self.admin).update({'id': task.id, 'detach_flow': True})
+        self.assertTrue(result.get('success'), result)
+        task.refresh_from_db()
+        self.assertIsNone(task.flow_id)
+        self.assertIsNone(task.current_step_id)
+        # the pool it was last with stays, so the task remains actionable
+        self.assertEqual(task.task_group_id, pool.id)
+
+        # detaching a task that never had a flow is refused
+        flat = self._flat_task('FsDetSource2', pool)
+        with self.assertRaises(ValidationError):
+            TaskService(self.admin).update({'id': flat.id, 'detach_flow': True})
+
+    def test_update_without_flow_fields_leaves_the_flow_intact(self):
+        # The safety property behind making detach an explicit flag: an
+        # ordinary update must never unbind a running review.
+        pool = self._group('fs_keep_pool')
+        flow = self._create_flow('FS_KEEP', pool)
+        step = flow.steps.get()
+        task = Task(
+            source='FsKeepSource', status=Task.Status.ACCEPTED,
+            executor_action_event=TasksManagementConfig.default_executor_event,
+            business_status={}, data={},
+            flow=flow, current_step=step, task_group=pool,
+        )
+        task.save(username=self.admin.username)
+
+        result = TaskService(self.admin).update({'id': task.id, 'status': Task.Status.ACCEPTED})
+        self.assertTrue(result.get('success'), result)
+        task.refresh_from_db()
+        self.assertEqual(task.flow_id, flow.id)
+        self.assertEqual(task.current_step_id, step.id)
 
     # ----------------------------------------------------------- ops command
 

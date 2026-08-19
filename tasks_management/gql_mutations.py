@@ -35,6 +35,12 @@ class UpdateTaskInput(OpenIMISMutation.Input):
     id = graphene.UUID(required=True)
     status = graphene.Field(TaskStatusEnum, required=False)
     task_group_id = graphene.UUID(required=False)
+    # Assignment is one decision with two shapes: an ordered approval flow or
+    # a flat task group. Setting a flow parks the task on step 1 and derives
+    # its group from that step, so the two are mutually exclusive. Detaching
+    # is an explicit flag, never an omitted or null flow_id.
+    flow_id = graphene.UUID(required=False)
+    detach_flow = graphene.Boolean(required=False)
 
 
 class UpdateTaskGroupInput(CreateTaskGroupInput):

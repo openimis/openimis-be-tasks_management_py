@@ -7,7 +7,7 @@ from core.models import User
 from core.validation import BaseModelValidation, UniqueCodeValidationMixin, ObjectExistsValidationMixin, \
     StringFieldValidationMixin
 from tasks_management.apps import TasksManagementConfig
-from tasks_management.models import TaskGroup, TaskExecutor, Task, TaskFlow, TaskFlowStep
+from tasks_management.models import TaskGroup, TaskExecutor, Task, TaskDecision, TaskFlow, TaskFlowStep
 
 
 class TaskGroupValidation(BaseModelValidation, UniqueCodeValidationMixin, ObjectExistsValidationMixin,
@@ -255,4 +255,49 @@ def validate_task_flow_steps(steps):
             errors.append({"message": _(
                 "tasks_management.validation.task_flow.step_threshold_exceeds_pool"
             ) % {'order': position, 'threshold': effective_threshold, 'pool': pool_size}})
+    return errors
+
+
+def validate_task_flow_assignment(task, flow, detach=False):
+    """
+    Assignment is one decision with two shapes - an ordered approval flow or a
+    flat task group - so attaching, switching and detaching are validated in
+    one place.
+
+    A task carrying decisions is off limits either way: its votes are recorded
+    against steps of the flow it was on, and re-pointing it would leave them
+    referring to a step the task no longer travels through.
+    """
+    if not task:
+        return [{"message": _("tasks_management.validation.task_flow_assignment.unknown_task")}]
+
+    errors = []
+    if task.status in (Task.Status.COMPLETED, Task.Status.FAILED):
+        errors.append({"message": _(
+            "tasks_management.validation.task_flow_assignment.task_closed"
+        ) % {'status': task.status}})
+    if TaskDecision.objects.filter(task=task, is_deleted=False).exists():
+        errors.append({"message": _(
+            "tasks_management.validation.task_flow_assignment.decisions_exist")})
+
+    if detach:
+        if not task.flow_id:
+            errors.append({"message": _(
+                "tasks_management.validation.task_flow_assignment.not_on_a_flow")})
+        return errors
+
+    if not flow:
+        errors.append({"message": _(
+            "tasks_management.validation.task_flow_assignment.unknown_flow")})
+        return errors
+    # Superseded versions keep serving the tasks already pinned to them but
+    # must never take on a new one.
+    if flow.is_deleted or flow.replacement_uuid:
+        errors.append({"message": _(
+            "tasks_management.validation.task_flow_assignment.flow_not_current"
+        ) % {'code': flow.code}})
+    elif not flow.steps.filter(is_deleted=False).exists():
+        errors.append({"message": _(
+            "tasks_management.validation.task_flow_assignment.flow_without_steps"
+        ) % {'code': flow.code}})
     return errors

@@ -18,7 +18,7 @@ from core.utils import to_json_safe_value
 from tasks_management.apps import TasksManagementConfig
 from tasks_management.models import TaskGroup, TaskExecutor, Task, TaskFlow, TaskFlowStep
 from tasks_management.validation import TaskGroupValidation, TaskExecutorValidation, TaskValidation, \
-    TaskFlowValidation
+    TaskFlowValidation, validate_task_flow_assignment
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,9 @@ class TaskService(BaseService):
     @register_service_signal('task_service.update')
     def update(self, obj_data):
         task = self.OBJECT_TYPE.objects.filter(id=obj_data.get('id')).first()
+        obj_data, assignment = self._pop_flow_assignment(obj_data)
+        if assignment is not None:
+            return super().update(self._apply_flow_assignment(task, obj_data, assignment))
         if task and task.flow_id:
             incoming_group = obj_data.get('task_group_id', obj_data.get('task_group'))
             incoming_group_id = getattr(incoming_group, 'id', incoming_group)
@@ -97,6 +100,64 @@ class TaskService(BaseService):
                     % (task.id, task.flow.code)
                 )
         return super().update(obj_data)
+
+    def _pop_flow_assignment(self, obj_data):
+        """
+        Split the flow assignment out of the update payload.
+
+        Detaching is an explicit flag rather than a null flow_id so an update
+        that simply does not mention the flow - a status change, a group edit -
+        can never silently unbind a review that is already running.
+
+        Returns (payload, assignment) where assignment is None for "not
+        requested", False for "detach" or a flow id to attach.
+        """
+        obj_data = dict(obj_data)
+        flow_id = obj_data.pop('flow_id', None)
+        detach = obj_data.pop('detach_flow', False)
+        if flow_id:
+            return obj_data, flow_id
+        if detach:
+            return obj_data, False
+        return obj_data, None
+
+    def _apply_flow_assignment(self, task, obj_data, assignment):
+        """
+        Attaching mirrors what create() does for a source-bound task: pin the
+        flow, park the task on step 1 and hand it to that step's pool. The two
+        shapes of assignment are mutually exclusive, so any group coming in on
+        the same payload is dropped - a flow task's group is derived.
+        """
+        detach = assignment is False
+        flow = None if detach else TaskFlow.objects.filter(id=assignment).first()
+        errors = validate_task_flow_assignment(task, flow, detach=detach)
+        if errors:
+            raise ValidationError(errors)
+
+        if detach:
+            logger.info(
+                "tasks_management.flow: task %s detached from flow '%s' - it keeps "
+                "task group '%s' and resolves flat from here",
+                task.id, task.flow.code,
+                task.task_group.code if task.task_group else None,
+            )
+            return {**obj_data, "flow": None, "current_step": None}
+
+        first_step = flow.steps.filter(is_deleted=False).order_by('order').first()
+        logger.info(
+            "tasks_management.flow: task %s assigned to flow '%s' (version %s), "
+            "step 1 pool '%s'",
+            task.id, flow.code, flow.id, first_step.task_group.code,
+        )
+        obj_data.pop('task_group_id', None)
+        obj_data.pop('task_group', None)
+        return {
+            **obj_data,
+            "flow": flow,
+            "current_step": first_step,
+            "task_group": first_step.task_group,
+            "status": Task.Status.ACCEPTED,
+        }
 
     @register_service_signal('task_service.delete')
     def delete(self, obj_data):

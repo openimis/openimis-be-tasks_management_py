@@ -69,3 +69,24 @@ msgstr "Entity not found."
 
 msgid "tasks_management.validation.validate_unique_task_source"
 msgstr "Task sources already assigned: %(task_groups_by_source)s"
+
+msgid "tasks_management.validation.task_flow_assignment.unknown_task"
+msgstr "Task not found."
+
+msgid "tasks_management.validation.task_flow_assignment.task_closed"
+msgstr "This task is already %(status)s and can no longer be reassigned."
+
+msgid "tasks_management.validation.task_flow_assignment.decisions_exist"
+msgstr "Decisions have already been recorded on this task, so its approval flow can no longer be changed."
+
+msgid "tasks_management.validation.task_flow_assignment.not_on_a_flow"
+msgstr "This task does not follow an approval flow."
+
+msgid "tasks_management.validation.task_flow_assignment.unknown_flow"
+msgstr "Approval flow not found."
+
+msgid "tasks_management.validation.task_flow_assignment.flow_not_current"
+msgstr "Approval flow %(code)s is no longer current - pick the latest version."
+
+msgid "tasks_management.validation.task_flow_assignment.flow_without_steps"
+msgstr "Approval flow %(code)s has no steps, so it cannot take on tasks."
