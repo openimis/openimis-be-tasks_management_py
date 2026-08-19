@@ -3,7 +3,7 @@ import json
 import graphene_django_optimizer as gql_optimizer
 
 from django.contrib.auth.models import AnonymousUser
-from django.db.models import Q
+from django.db.models import Count, Q
 
 from core.schema import OrderedDjangoFilterConnectionField
 from core.services import wait_for_mutation
@@ -12,7 +12,7 @@ from tasks_management.gql_mutations import CreateTaskGroupMutation, UpdateTaskGr
     UpdateTaskMutation, ResolveTaskMutation, CreateTaskFlowMutation, UpdateTaskFlowMutation, \
     ReplaceTaskFlowMutation, DeleteTaskFlowMutation
 from tasks_management.gql_queries import TaskGroupGQLType, TaskExecutorGQLType, TaskGQLType, TaskHistoryGQLType, \
-    TaskFlowGQLType, TaskDecisionGQLType
+    TaskFlowGQLType, TaskDecisionGQLType, TaskAssignmentTargetGQLType
 from tasks_management.models import TaskGroup, TaskExecutor, Task, TaskFlow, TaskDecision
 from tasks_management.apps import TasksManagementConfig
 
@@ -124,6 +124,14 @@ class Query(graphene.ObjectType):
 
         return gql_optimizer.query(query, info)
 
+    task_assignment_targets = graphene.List(
+        TaskAssignmentTargetGQLType,
+        search=graphene.String(),
+        first=graphene.Int(),
+        include_flows=graphene.Boolean(),
+        include_groups=graphene.Boolean(),
+    )
+
     def resolve_task_group(self, info, **kwargs):
         filters = append_validity_filter(**kwargs)
 
@@ -177,6 +185,48 @@ class Query(graphene.ObjectType):
 
         query = TaskFlow.objects.filter(*filters, is_deleted=False)
         return gql_optimizer.query(query, info)
+
+    def resolve_task_assignment_targets(
+        self, info, search=None, first=20, include_flows=True, include_groups=True,
+    ):
+        """
+        Serves the single "assigned to" picker. `first` caps each kind, not
+        the combined list, so a long list of groups can never crowd the flows
+        out of the dropdown.
+        """
+        Query._check_permissions(info.context.user, TasksManagementConfig.gql_task_search_perms)
+        targets = []
+
+        # Flows are only offered to users who may see them at all; everyone
+        # else simply gets the groups, and the picker degrades to its old self.
+        may_see_flows = info.context.user.has_perms(
+            TasksManagementConfig.gql_task_flow_search_perms)
+        if include_flows and may_see_flows:
+            flows = TaskFlow.objects.filter(
+                is_deleted=False, replacement_uuid__isnull=True,
+            ).annotate(
+                live_step_count=Count('steps', filter=Q(steps__is_deleted=False)),
+            ).filter(live_step_count__gt=0)
+            if search:
+                flows = flows.filter(Q(code__icontains=search) | Q(name__icontains=search))
+            targets += [
+                TaskAssignmentTargetGQLType.from_flow(flow, flow.live_step_count)
+                for flow in flows.order_by('code')[:first]
+            ]
+
+        if include_groups:
+            groups = TaskGroup.objects.filter(is_deleted=False).annotate(
+                live_member_count=Count(
+                    'taskexecutor', filter=Q(taskexecutor__is_deleted=False)),
+            )
+            if search:
+                groups = groups.filter(code__icontains=search)
+            targets += [
+                TaskAssignmentTargetGQLType.from_group(group, group.live_member_count)
+                for group in groups.order_by('code')[:first]
+            ]
+
+        return targets
 
     def resolve_task_decision(self, info, **kwargs):
         # No perms check: TaskDecisionGQLType.get_queryset scopes rows to the

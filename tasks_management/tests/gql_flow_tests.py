@@ -6,8 +6,8 @@ from django.test import TestCase
 from core.test_helpers import create_test_interactive_user
 from tasks_management.apps import TasksManagementConfig
 from tasks_management.gql_mutations import ResolveTaskMutation
-from tasks_management.gql_queries import TaskDecisionGQLType
-from tasks_management.models import Task, TaskDecision, TaskExecutor, TaskGroup
+from tasks_management.gql_queries import TaskAssignmentTargetGQLType, TaskDecisionGQLType
+from tasks_management.models import Task, TaskDecision, TaskExecutor, TaskFlow, TaskFlowStep, TaskGroup
 
 
 class GqlFlowTestCase(TestCase):
@@ -75,3 +75,55 @@ class GqlFlowTestCase(TestCase):
         self.assertIn(decision, visible_to(self.admin))
         self.assertIn(decision, visible_to(self.executor))
         self.assertNotIn(decision, visible_to(self.outsider))
+
+    # ------------------------------------------------- assignment targets
+
+    def _targets(self, user, **kwargs):
+        from tasks_management.schema import Query
+        info = SimpleNamespace(context=SimpleNamespace(user=user))
+        return Query.resolve_task_assignment_targets(None, info, **kwargs)
+
+    def test_assignment_targets_offer_only_assignable_flows(self):
+        flow = TaskFlow(code='GQL_ASGN', name='assignable')
+        flow.save(username=self.admin.username)
+        TaskFlowStep(flow=flow, task_group=self.group, order=1).save(username=self.admin.username)
+
+        stepless = TaskFlow(code='GQL_ASGN_EMPTY', name='no steps')
+        stepless.save(username=self.admin.username)
+
+        superseded = TaskFlow(code='GQL_ASGN_OLD', name='old')
+        superseded.save(username=self.admin.username)
+        TaskFlowStep(flow=superseded, task_group=self.group, order=1).save(
+            username=self.admin.username)
+        superseded.replacement_uuid = flow.id
+        superseded.save(username=self.admin.username)
+
+        targets = self._targets(self.admin)
+        flows = {t.code: t for t in targets if t.kind == 'FLOW'}
+        groups = {t.code: t for t in targets if t.kind == 'GROUP'}
+
+        self.assertIn('GQL_ASGN', flows)
+        self.assertEqual(flows['GQL_ASGN'].step_count, 1)
+        # a flow with no steps, or a superseded version, would be refused by
+        # the mutation - so the picker never shows them
+        self.assertNotIn('GQL_ASGN_EMPTY', flows)
+        self.assertNotIn('GQL_ASGN_OLD', flows)
+
+        self.assertIn('gql_g1', groups)
+        self.assertEqual(groups['gql_g1'].member_count, 1)
+        self.assertEqual(groups['gql_g1'].completion_policy, 'ANY')
+
+    def test_assignment_targets_filter_and_scope(self):
+        flow = TaskFlow(code='GQL_SEARCHABLE', name='findme')
+        flow.save(username=self.admin.username)
+        TaskFlowStep(flow=flow, task_group=self.group, order=1).save(username=self.admin.username)
+
+        by_code = self._targets(self.admin, search='SEARCHABLE')
+        self.assertEqual([t.code for t in by_code], ['GQL_SEARCHABLE'])
+
+        groups_only = self._targets(self.admin, include_flows=False)
+        self.assertTrue(groups_only)
+        self.assertTrue(all(t.kind == 'GROUP' for t in groups_only))
+
+        with self.assertRaises(PermissionError):
+            self._targets(self.outsider)

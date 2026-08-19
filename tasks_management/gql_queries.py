@@ -259,6 +259,49 @@ class TaskFlowGQLType(DjangoObjectType):
         ).count()
 
 
+class TaskAssignmentTargetGQLType(graphene.ObjectType):
+    """
+    One row of the task assignment picker.
+
+    Assigning a task is a single decision with two shapes - an ordered
+    approval flow or a flat task group - so both are served from one query,
+    tagged with `kind`, instead of making the client merge and paginate two
+    lists. Only assignable targets are returned: a flow without steps or a
+    superseded version would be rejected by the mutation, so it is never
+    offered.
+    """
+
+    class Kind(graphene.Enum):
+        FLOW = 'FLOW'
+        GROUP = 'GROUP'
+
+    kind = graphene.Field(Kind, required=True)
+    uuid = graphene.String(required=True)
+    code = graphene.String()
+    name = graphene.String()
+    # FLOW only
+    step_count = graphene.Int()
+    # GROUP only
+    completion_policy = graphene.String()
+    threshold = graphene.Int()
+    member_count = graphene.Int()
+
+    @classmethod
+    def from_flow(cls, flow, step_count):
+        return cls(
+            kind='FLOW', uuid=str(flow.id), code=flow.code, name=flow.name,
+            step_count=step_count,
+        )
+
+    @classmethod
+    def from_group(cls, group, member_count):
+        return cls(
+            kind='GROUP', uuid=str(group.id), code=group.code, name=group.code,
+            completion_policy=group.completion_policy, threshold=group.threshold,
+            member_count=member_count,
+        )
+
+
 class TaskDecisionGQLType(DjangoObjectType):
     uuid = graphene.String(source='uuid')
 
