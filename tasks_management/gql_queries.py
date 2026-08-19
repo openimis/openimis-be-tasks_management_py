@@ -25,6 +25,7 @@ class TaskGQLType(DjangoObjectType):
     uuid = graphene.String(source='uuid')
     business_data = graphene.JSONString()
     entity_string = graphene.String()
+    decision_count = graphene.Int()
 
     class Meta:
         model = Task
@@ -45,6 +46,12 @@ class TaskGQLType(DjangoObjectType):
             "version": ["exact"],
         }
         connection_class = ExtendedConnection
+
+    def resolve_decision_count(self, info):
+        # Lets the client lock the assignment picker instead of offering a
+        # change the service would refuse: votes are recorded against the
+        # steps of the flow the task is on.
+        return self.decisions.filter(is_deleted=False).count()
 
     def resolve_business_data(self, info):
         data = self.data
