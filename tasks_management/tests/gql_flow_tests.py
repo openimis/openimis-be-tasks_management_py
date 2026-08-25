@@ -6,7 +6,7 @@ from django.test import TestCase
 from core.test_helpers import create_test_interactive_user
 from tasks_management.apps import TasksManagementConfig
 from tasks_management.gql_mutations import ResolveTaskMutation
-from tasks_management.gql_queries import TaskAssignmentTargetGQLType, TaskDecisionGQLType
+from tasks_management.gql_queries import TaskDecisionGQLType
 from tasks_management.models import Task, TaskDecision, TaskExecutor, TaskFlow, TaskFlowStep, TaskGroup
 
 
