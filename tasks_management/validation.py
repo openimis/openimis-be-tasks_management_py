@@ -286,6 +286,19 @@ def validate_task_flow_assignment(task, flow, detach=False):
                 "tasks_management.validation.task_flow_assignment.not_on_a_flow")})
         return errors
 
+    # The same two gates create() applies when matching a flow by source.
+    # A source whose business logic runs on the first vote would bypass every
+    # later step, and a task resolved through a custom executor event never
+    # reaches the advancement signal at all - it would sit on step 1 forever.
+    if task.source in (TasksManagementConfig.flow_ineligible_sources or []):
+        errors.append({"message": _(
+            "tasks_management.validation.task_flow_assignment.source_ineligible"
+        ) % {'source': task.source}})
+    if task.executor_action_event != TasksManagementConfig.default_executor_event:
+        errors.append({"message": _(
+            "tasks_management.validation.task_flow_assignment.custom_executor_event"
+        ) % {'event': task.executor_action_event}})
+
     if not flow:
         errors.append({"message": _(
             "tasks_management.validation.task_flow_assignment.unknown_flow")})

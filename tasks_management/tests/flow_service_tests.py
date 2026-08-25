@@ -397,6 +397,25 @@ class FlowServiceTestCase(TestCase):
         with self.assertRaises(ValidationError):
             service.update({'id': task.id, 'flow_id': str(other_flow.id)})
 
+    def test_assign_flow_rejected_for_ineligible_tasks(self):
+        pool = self._group('fs_asgn6_pool')
+        flow = self._create_flow('FS_ASGN6', pool)
+        service = TaskService(self.admin)
+
+        ineligible_source = (TasksManagementConfig.flow_ineligible_sources or [])[0]
+        by_source = self._flat_task(ineligible_source, pool)
+        with self.assertRaises(ValidationError):
+            service.update({'id': by_source.id, 'flow_id': str(flow.id)})
+
+        custom_event = Task(
+            source='FsAsgn6Source', status=Task.Status.RECEIVED,
+            executor_action_event='custom_event',
+            business_status={}, data={}, task_group=pool,
+        )
+        custom_event.save(username=self.admin.username)
+        with self.assertRaises(ValidationError):
+            service.update({'id': custom_event.id, 'flow_id': str(flow.id)})
+
     def test_detach_flow_returns_task_to_flat(self):
         pool = self._group('fs_det_pool')
         flow = self._create_flow('FS_DET', pool)
