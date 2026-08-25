@@ -86,12 +86,32 @@ def _is_privileged_resolver(_user):
     return getattr(_user, 'is_imis_admin', False) or is_task_triage(_user)
 
 
+def _is_batch_task(_task):
+    """
+    Batch sources submit {ACCEPT: [...], REJECT: [...]} per record instead of
+    one verdict for the whole task, so they evaluate on the batch path.
+    """
+    return _task.source in (TasksManagementConfig.flow_batch_sources or [])
+
+
 def _validate_flow_vote(_task, _step, _user, _verdict):
     if isinstance(_verdict, dict):
+        if not _is_batch_task(_task):
+            raise ValidationError(
+                "tasks_management.flow: source '%s' submitted a per-record vote but "
+                "is not a batch source - add '%s' to flow_batch_sources, or remove "
+                "the flow binding" % (_task.source, _task.source)
+            )
+        if not (_verdict.get('ACCEPT') or _verdict.get('REJECT')):
+            raise ValidationError(
+                "tasks_management.flow: per-record vote on task '%s' names no "
+                "records" % _task.id
+            )
+        return
+    if _is_batch_task(_task):
         raise ValidationError(
-            "tasks_management.flow: source '%s' submits per-record votes and cannot "
-            "use flows - remove the flow binding or add '%s' to "
-            "flow_ineligible_sources" % (_task.source, _task.source)
+            "tasks_management.flow: source '%s' is a batch source and must submit a "
+            "per-record vote, not '%s'" % (_task.source, _verdict)
         )
     if _verdict not in _FLOW_VERDICTS:
         raise ValidationError(
@@ -107,6 +127,153 @@ def _validate_flow_vote(_task, _step, _user, _verdict):
             "tasks_management.flow: user '%s' is not an executor of group '%s' for "
             "the current step and has no triage rights" % (_user.id, _step.task_group.code)
         )
+
+
+def _advance_or_complete(_task, _step, _user):
+    """
+    Move a task off a passed step: to the next step of its pinned flow
+    version, or 'completed' when the passed step was terminal. Shared by the
+    whole-task and batch evaluators - advancement does not depend on how the
+    step was judged.
+    """
+    # Advance within the task's pinned flow version - steps are read through
+    # the FK only, never re-resolved through the flow code (version pinning).
+    next_step = TaskFlowStep.objects.filter(
+        flow_id=_task.flow_id, is_deleted=False, order__gt=_step.order,
+    ).select_related('task_group').order_by('order').first()
+
+    if next_step is None:
+        # Terminal step passed. current_step deliberately keeps pointing at
+        # the terminal step so the FE stepper can render the finished state.
+        logger.info(
+            "tasks_management.flow: task %s passed terminal step %s (order %s)",
+            _task.id, _step.id, _step.order,
+        )
+        return 'completed'
+
+    _task.current_step = next_step
+    # Repointing task_group keeps executor-based visibility, counting and the
+    # FE working unchanged: the task now belongs to the next step's pool.
+    _task.task_group = next_step.task_group
+    _task.save(username=_user.login_name)
+    logger.info(
+        "tasks_management.flow: task %s advanced from step order %s to %s (pool '%s')",
+        _task.id, _step.order, next_step.order, next_step.task_group.code,
+    )
+    next_pool_size = next_step.task_group.taskexecutor_set.filter(
+        task_group__is_deleted=False, is_deleted=False,
+    ).count()
+    if next_pool_size == 0:
+        logger.error(
+            "tasks_management.flow: task %s advanced into empty pool '%s' (order %s) "
+            "- held until the pool is refilled",
+            _task.id, next_step.task_group.code, next_step.order,
+        )
+    return None
+
+
+def _record_batch_decisions(_task, _step, _user, _verdict):
+    """
+    Insert this reviewer's per-record verdicts for the current step. Re-votes
+    on a record already decided by the same reviewer at this step are ignored
+    (check-then-insert under the caller's lock, mirroring the whole-task path:
+    an IntegrityError inside the atomic block would poison the transaction).
+
+    Returns True when at least one new decision was recorded.
+    """
+    recorded = False
+    per_record = (
+        (TaskDecision.Decision.APPROVED, _verdict.get('ACCEPT') or []),
+        (TaskDecision.Decision.REJECTED, _verdict.get('REJECT') or []),
+    )
+    for decision, record_ids in per_record:
+        for record_id in record_ids:
+            record_id = str(record_id)
+            if not record_id:
+                continue
+            exists = TaskDecision.objects.filter(
+                task=_task, flow_step=_step, user=_user,
+                record_id=record_id, is_deleted=False,
+            ).exists()
+            if exists:
+                continue
+            TaskDecision(
+                task=_task, flow_step=_step, user=_user,
+                decision=decision, record_id=record_id,
+            ).save(username=_user.login_name)
+            recorded = True
+    return recorded
+
+
+def flow_rejected_record_ids(_task):
+    """
+    Record ids rejected at any step of this task's flow.
+
+    Consumer modules apply the batch once, at completion, to everything in the
+    upload except these - mirroring the flat behaviour, where a rejected row is
+    removed and whatever is left gets imported. Deliberately the complement:
+    tasks_management never sees the universe of records, only the verdicts, so
+    the caller subtracts rather than us enumerating.
+    """
+    return set(
+        TaskDecision.objects.filter(
+            task=_task, flow_step__isnull=False,
+            decision=TaskDecision.Decision.REJECTED, is_deleted=False,
+        ).exclude(record_id__isnull=True).values_list('record_id', flat=True)
+    )
+
+
+def _evaluate_batch_step(_task, _step, _user):
+    """
+    Step evaluation for a batch task. The batch advances as a unit, so the
+    step's policy counts *reviewers who have submitted a verdict* rather than
+    approvals of a single subject - there is no one verdict to count. Records
+    rejected here stay rejected for the rest of the flow; the surviving set is
+    derived from the ledger at completion.
+
+    Returns 'completed' or None. A per-record rejection never fails the whole
+    task: it drops that row, which is what the flat path does too.
+    """
+    reviewers = TaskDecision.objects.filter(
+        task=_task, flow_step=_step, is_deleted=False,
+    ).exclude(record_id__isnull=True).values('user').distinct().count()
+
+    executor_count = _step.task_group.taskexecutor_set.filter(
+        task_group__is_deleted=False, is_deleted=False,
+    ).count()
+    if executor_count == 0:
+        logger.error(
+            "tasks_management.flow: batch task %s held at step %s (order %s) - "
+            "executor pool '%s' is empty; refill the pool to resume",
+            _task.id, _step.id, _step.order, _step.task_group.code,
+        )
+        return None
+
+    policy = _step.effective_policy()
+    threshold = _step.effective_threshold()
+    if policy == TaskFlowStep.StepCompletionPolicy.ALL:
+        passed = reviewers >= executor_count
+    elif policy == TaskFlowStep.StepCompletionPolicy.ANY:
+        passed = reviewers >= 1
+    elif policy == TaskFlowStep.StepCompletionPolicy.N:
+        if not threshold:
+            logger.error(
+                "tasks_management.flow: batch task %s step %s has policy N without "
+                "a threshold; holding", _task.id, _step.id,
+            )
+            return None
+        passed = reviewers >= threshold
+    else:
+        logger.error(
+            "tasks_management.flow: batch task %s step %s has unknown policy '%s'; "
+            "holding", _task.id, _step.id, policy,
+        )
+        return None
+
+    if not passed:
+        return None
+
+    return _advance_or_complete(_task, _step, _user)
 
 
 def _evaluate_step(_task, _step, _user):
@@ -166,40 +333,7 @@ def _evaluate_step(_task, _step, _user):
     if not passed:
         return None
 
-    # Advance within the task's pinned flow version - steps are read through
-    # the FK only, never re-resolved through the flow code (version pinning).
-    next_step = TaskFlowStep.objects.filter(
-        flow_id=_task.flow_id, is_deleted=False, order__gt=_step.order,
-    ).select_related('task_group').order_by('order').first()
-
-    if next_step is None:
-        # Terminal step passed. current_step deliberately keeps pointing at
-        # the terminal step so the FE stepper can render the finished state.
-        logger.info(
-            "tasks_management.flow: task %s passed terminal step %s (order %s)",
-            _task.id, _step.id, _step.order,
-        )
-        return 'completed'
-
-    _task.current_step = next_step
-    # Repointing task_group keeps executor-based visibility, counting and the
-    # FE working unchanged: the task now belongs to the next step's pool.
-    _task.task_group = next_step.task_group
-    _task.save(username=_user.login_name)
-    logger.info(
-        "tasks_management.flow: task %s advanced from step order %s to %s (pool '%s')",
-        _task.id, _step.order, next_step.order, next_step.task_group.code,
-    )
-    next_pool_size = next_step.task_group.taskexecutor_set.filter(
-        task_group__is_deleted=False, is_deleted=False,
-    ).count()
-    if next_pool_size == 0:
-        logger.error(
-            "tasks_management.flow: task %s advanced into empty pool '%s' (order %s) "
-            "- held until the pool is refilled",
-            _task.id, next_step.task_group.code, next_step.order,
-        )
-    return None
+    return _advance_or_complete(_task, _step, _user)
 
 
 def re_evaluate_flow_task(_task_id, _user):
@@ -219,7 +353,8 @@ def re_evaluate_flow_task(_task_id, _user):
                 "nothing to re-evaluate", _task_id,
             )
             return
-        outcome = _evaluate_step(_task, _task.current_step, _user)
+        outcome = (_evaluate_batch_step if _is_batch_task(_task) else _evaluate_step)(
+            _task, _task.current_step, _user)
     if outcome == 'failed':
         TaskService(_user).complete_task({"id": _task_id, 'failed': True})
     elif outcome == 'completed':
@@ -258,25 +393,33 @@ def resolve_flow_task(_task_id, _user, _verdict):
 
         _validate_flow_vote(_task, step, _user, _verdict)
 
-        # Duplicate votes are detected check-then-insert under the lock (an
-        # IntegrityError inside this atomic block would poison the
-        # transaction) and still re-run evaluation: a re-vote is the
-        # documented backstop that resumes a task held on an emptied pool.
-        exists = TaskDecision.objects.filter(
-            task=_task, flow_step=step, user=_user,
-            record_id__isnull=True, is_deleted=False,
-        ).exists()
-        if exists:
-            logger.warning(
-                "tasks_management.flow: duplicate vote by user %s on task %s step %s; "
-                "re-evaluating", _user.id, _task.id, step.id,
-            )
+        if _is_batch_task(_task):
+            if not _record_batch_decisions(_task, step, _user, _verdict):
+                logger.warning(
+                    "tasks_management.flow: batch vote by user %s on task %s step %s "
+                    "added no new records; re-evaluating", _user.id, _task.id, step.id,
+                )
+            outcome = _evaluate_batch_step(_task, step, _user)
         else:
-            TaskDecision(
-                task=_task, flow_step=step, user=_user, decision=_verdict,
-            ).save(username=_user.login_name)
+            # Duplicate votes are detected check-then-insert under the lock (an
+            # IntegrityError inside this atomic block would poison the
+            # transaction) and still re-run evaluation: a re-vote is the
+            # documented backstop that resumes a task held on an emptied pool.
+            exists = TaskDecision.objects.filter(
+                task=_task, flow_step=step, user=_user,
+                record_id__isnull=True, is_deleted=False,
+            ).exists()
+            if exists:
+                logger.warning(
+                    "tasks_management.flow: duplicate vote by user %s on task %s step %s; "
+                    "re-evaluating", _user.id, _task.id, step.id,
+                )
+            else:
+                TaskDecision(
+                    task=_task, flow_step=step, user=_user, decision=_verdict,
+                ).save(username=_user.login_name)
 
-        outcome = _evaluate_step(_task, step, _user)
+            outcome = _evaluate_step(_task, step, _user)
 
     if outcome == 'failed':
         TaskService(_user).complete_task({"id": _task.id, 'failed': True})

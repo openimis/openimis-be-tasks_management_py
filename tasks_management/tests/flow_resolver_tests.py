@@ -87,6 +87,95 @@ class FlowResolverTestCase(TestCase):
             'business_status': {str(user.id): verdict},
         })
 
+    def _batch_task(self, flow):
+        # import_valid_items is a configured batch source: it submits
+        # {ACCEPT: [...], REJECT: [...]} per record instead of one verdict.
+        return self._flow_task(flow, source='import_valid_items')
+
+    # ----------------------------------------------------------------- batch
+
+    def test_batch_step_advances_on_reviewer_vote(self):
+        group1 = self._group('bt1', 'ANY', executors=[self.exec_a])
+        group2 = self._group('bt2', 'ANY', executors=[self.exec_b])
+        flow = self._flow('f_batch', (group1, None, None), (group2, None, None))
+        task = self._batch_task(flow)
+
+        self._vote(task, self.exec_a, {'ACCEPT': ['r1', 'r2'], 'REJECT': ['r3']})
+
+        task.refresh_from_db()
+        self.assertEqual(task.status, Task.Status.ACCEPTED)
+        self.assertEqual(task.current_step.order, 2)
+        # the batch moved as a unit and the pool followed the step
+        self.assertEqual(task.task_group_id, group2.id)
+        self.assertEqual(
+            TaskDecision.objects.filter(task=task, is_deleted=False).count(), 3)
+
+    def test_batch_rejections_accumulate_across_steps(self):
+        from tasks_management.signals.on_task_resolve import flow_rejected_record_ids
+
+        group1 = self._group('br1', 'ANY', executors=[self.exec_a])
+        group2 = self._group('br2', 'ANY', executors=[self.exec_b])
+        flow = self._flow('f_batch_rej', (group1, None, None), (group2, None, None))
+        task = self._batch_task(flow)
+
+        self._vote(task, self.exec_a, {'ACCEPT': ['r1', 'r2'], 'REJECT': ['r3']})
+        task.refresh_from_db()
+        self._vote(task, self.exec_b, {'ACCEPT': ['r1'], 'REJECT': ['r2']})
+
+        task.refresh_from_db()
+        self.assertEqual(task.status, Task.Status.COMPLETED)
+        # a row rejected at any step stays rejected for the whole flow
+        self.assertEqual(flow_rejected_record_ids(task), {'r2', 'r3'})
+
+    def test_batch_step_all_waits_for_every_reviewer(self):
+        group1 = self._group('ba1', 'ALL', executors=[self.exec_a, self.exec_b])
+        flow = self._flow('f_batch_all', (group1, None, None))
+        task = self._batch_task(flow)
+
+        self._vote(task, self.exec_a, {'ACCEPT': ['r1']})
+        task.refresh_from_db()
+        self.assertEqual(task.status, Task.Status.ACCEPTED)
+
+        # ALL counts reviewers who submitted, not approvals of one subject
+        self._vote(task, self.exec_b, {'ACCEPT': ['r1']})
+        task.refresh_from_db()
+        self.assertEqual(task.status, Task.Status.COMPLETED)
+
+    def test_batch_source_rejects_whole_task_verdict(self):
+        group1 = self._group('bw1', 'ANY', executors=[self.exec_a])
+        flow = self._flow('f_batch_whole', (group1, None, None))
+        task = self._batch_task(flow)
+
+        with self.assertRaises(ValidationError):
+            self._vote(task, self.exec_a, 'APPROVED')
+        task.refresh_from_db()
+        self.assertEqual(task.status, Task.Status.ACCEPTED)
+        self.assertFalse(TaskDecision.objects.filter(task=task).exists())
+
+    def test_batch_empty_vote_raises(self):
+        group1 = self._group('be1', 'ANY', executors=[self.exec_a])
+        flow = self._flow('f_batch_empty', (group1, None, None))
+        task = self._batch_task(flow)
+
+        with self.assertRaises(ValidationError):
+            self._vote(task, self.exec_a, {'ACCEPT': [], 'REJECT': []})
+        task.refresh_from_db()
+        self.assertEqual(task.status, Task.Status.ACCEPTED)
+
+    def test_batch_duplicate_record_vote_is_idempotent(self):
+        group1 = self._group('bd1', 'ALL', executors=[self.exec_a, self.exec_b])
+        flow = self._flow('f_batch_dup', (group1, None, None))
+        task = self._batch_task(flow)
+
+        self._vote(task, self.exec_a, {'ACCEPT': ['r1']})
+        self._vote(task, self.exec_a, {'ACCEPT': ['r1']})
+
+        task.refresh_from_db()
+        # the re-vote adds nothing and does not count as a second reviewer
+        self.assertEqual(
+            TaskDecision.objects.filter(task=task, is_deleted=False).count(), 1)
+        self.assertEqual(task.status, Task.Status.ACCEPTED)
+
     # ------------------------------------------------------------------ flow
 
     def test_two_step_flow_advances_and_completes(self):

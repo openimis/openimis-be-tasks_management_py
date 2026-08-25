@@ -20,13 +20,18 @@ DEFAULT_CONFIG = {
     "default_executor_event": "default",
     "task_user_approved": "APPROVED",
     # Sources whose tasks are resolved per-record by consumer modules at
-    # resolve time (individual/social_protection imports, claim sampling).
-    # Flows must not bind to them: their business logic executes on the
-    # first vote, which would bypass every later step.
+    # resolve time. Flows must not bind to them: their business logic
+    # executes on the first vote, which would bypass every later step.
     "flow_ineligible_sources": [
+        "claim_sampling",
+    ],
+    # Sources that submit a per-record verdict ({ACCEPT: [...], REJECT: [...]})
+    # instead of one verdict for the whole task. They follow flows through the
+    # batch path: the batch advances as a unit, each step filters records out,
+    # and the consumer module applies the surviving set once at completion.
+    "flow_batch_sources": [
         "import_valid_items",
         "import_group_valid_items",
-        "claim_sampling",
     ],
 }
 
@@ -51,6 +56,7 @@ class TasksManagementConfig(AppConfig):
     default_executor_event = None
     task_user_approved = None
     flow_ineligible_sources = None
+    flow_batch_sources = None
 
     def ready(self):
         from core.models import ModuleConfiguration

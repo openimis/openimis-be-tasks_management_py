@@ -92,8 +92,11 @@ class FlowServiceTestCase(TestCase):
             'threshold above pool': self._flow_payload(
                 'FS_B5', group,
                 steps=[{'task_group_id': str(group.id), 'completion_policy': 'N', 'threshold': 5}]),
+            # claim_sampling stays ineligible: it resolves per-record at vote
+            # time. The CSV import sources moved to flow_batch_sources and are
+            # bindable now, covered on the batch path in flow_resolver_tests.
             'ineligible source': self._flow_payload(
-                'FS_B6', group, task_sources=['import_valid_items']),
+                'FS_B6', group, task_sources=['claim_sampling']),
         }
         for label, payload in cases.items():
             result = self.service.create(payload)
