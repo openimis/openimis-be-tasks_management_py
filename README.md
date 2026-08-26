@@ -49,7 +49,8 @@ It is dedicated to be deployed as a module of [openimis-be_py](https://github.co
 * gql_task_flow_update_perms: 192003
 * gql_task_flow_delete_perms: 192004
 * default_executor_event: default
-* flow_ineligible_sources: import_valid_items, import_group_valid_items, claim_sampling
+* flow_ineligible_sources: claim_sampling
+* flow_batch_sources: import_valid_items, import_group_valid_items
 
 ## openIMIS Modules Dependencies
 - core
@@ -85,14 +86,26 @@ time, not from module code. A fresh deployment must grant these four rights to
 the appropriate roles there before any approval-flow screen becomes usable to
 anyone but a superuser.
 
+**Per-record batch sources follow flows too, on a separate path.**
+`flow_batch_sources` (`import_valid_items`, `import_group_valid_items`) lists
+sources that submit a per-record verdict - `{ACCEPT: [...], REJECT: [...]}` -
+instead of one verdict for the whole task. A batch task's step evaluates by
+*reviewers who have voted*, not by counting approvals of a single subject:
+each `TaskDecision` is recorded per record per step, a record rejected at any
+step stays rejected for the rest of the flow, and the step (and the task)
+advances once enough distinct reviewers have submitted a verdict to satisfy
+the step's policy - the same ALL/ANY/N+threshold policies as a whole-task
+step. `flow_rejected_record_ids(task)` gives the consumer module the set of
+record ids rejected anywhere along the flow; the module applies its business
+action once, at task completion, to everything in the upload except those -
+mirroring the flat behaviour where a rejected row is simply left out.
+
 **Not every task source can join a flow.** `flow_ineligible_sources` lists
-sources whose resolution is per-record rather than per-task - CSV import
-validators (`import_valid_items`, `import_group_valid_items`) and claim
-sampling (`claim_sampling`) resolve accept/reject per row of a single task's
-`business_status`, which the flow step model does not yet represent. A flow
-match against one of these sources is skipped at creation, and a manual
-`updateTask(flowId: ...)` against one of their tasks is rejected. Per-record
-flow support is intentionally out of scope for this version.
+sources whose resolution is genuinely incompatible with either flow path -
+claim sampling (`claim_sampling`) does not fit the per-task or per-record
+verdict shape the flow engine expects. A flow match against one of these
+sources is skipped at creation, and a manual `updateTask(flowId: ...)`
+against one of their tasks is rejected.
 
 ## Creating execution action handlers and business event handlers
 When user action specified by the task is being passed to backend, the task service sends ``task_service.resolve_task`` 
