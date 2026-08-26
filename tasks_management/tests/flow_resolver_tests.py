@@ -406,3 +406,63 @@ class FlowResolverTestCase(TestCase):
         self.assertEqual(task.status, Task.Status.FAILED)
         decision = TaskDecision.objects.get(task=task)
         self.assertEqual(decision.decision, TaskDecision.Decision.FAILED)
+
+    # ------------------------------------------------- authorization (batch)
+
+    def test_batch_vote_by_non_executor_rejected(self):
+        # The batch shape branch must fall through to the same membership
+        # check as the whole-task branch - a valid-shaped per-record vote is
+        # not itself proof the caller may cast it.
+        group1 = self._group('bauth1', 'ANY', executors=[self.exec_a])
+        flow = self._flow('f_batch_auth', (group1, None, None))
+        task = self._batch_task(flow)
+
+        with self.assertRaises(ValidationError):
+            self._vote(task, self.outsider, {'ACCEPT': ['r1']})
+        self.assertFalse(TaskDecision.objects.filter(task=task).exists())
+
+    def test_batch_vote_by_privileged_resolver_allowed(self):
+        group1 = self._group('bauth2', 'ANY', executors=[self.exec_a])
+        flow = self._flow('f_batch_priv', (group1, None, None))
+        task = self._batch_task(flow)
+
+        admin = create_test_interactive_user(username='flow_batch_admin')
+        result = self._vote(task, admin, {'ACCEPT': ['r1']})
+        self.assertTrue(result.get('success'), result)
+
+    # --------------------------------------------- terminal transition guard
+
+    def test_direct_terminal_status_update_rejected(self):
+        # updateTask(status: COMPLETED) must not be a side door around
+        # complete_task() - only step evaluation may close a flow task.
+        group1 = self._group('tterm1', 'ANY', executors=[self.exec_a])
+        flow = self._flow('f_term', (group1, None, None))
+        task = self._flow_task(flow)
+
+        with self.assertRaises(ValidationError):
+            TaskService(self.exec_a).update({'id': task.id, 'status': Task.Status.COMPLETED})
+        task.refresh_from_db()
+        self.assertEqual(task.status, Task.Status.ACCEPTED)
+
+    def test_reevaluate_after_completion_does_not_recomplete(self):
+        # Stand-in for a true concurrency test (this codebase's tests run
+        # single-threaded): re-entering evaluation on an already-terminal
+        # task must be a no-op, which is exactly the property
+        # _claim_terminal_transition exists to guarantee against a second
+        # concurrent voter racing the same step to completion.
+        from tasks_management.signals.on_task_resolve import re_evaluate_flow_task
+
+        group1 = self._group('treev1', 'ANY', executors=[self.exec_a])
+        flow = self._flow('f_reeval_done', (group1, None, None))
+        task = self._flow_task(flow)
+
+        self._vote(task, self.exec_a, 'APPROVED')
+        task.refresh_from_db()
+        self.assertEqual(task.status, Task.Status.COMPLETED)
+        version_after_completion = task.version
+
+        re_evaluate_flow_task(task.id, self.exec_a)
+        task.refresh_from_db()
+        self.assertEqual(task.status, Task.Status.COMPLETED)
+        self.assertEqual(task.version, version_after_completion)
+

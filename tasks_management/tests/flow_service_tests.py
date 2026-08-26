@@ -490,3 +490,57 @@ class FlowServiceTestCase(TestCase):
         call_command('re_evaluate_task_step', str(task.id), username=self.admin.username)
         task.refresh_from_db()
         self.assertEqual(task.status, Task.Status.COMPLETED)
+
+    # ------------------------------------------------- N-policy task groups
+
+    def test_create_n_group_requires_threshold(self):
+        result = TaskGroupService(self.admin).create({
+            'code': 'fs_n_no_threshold', 'completion_policy': 'N',
+            'user_ids': [str(self.exec_a.id)],
+        })
+        self.assertFalse(result.get('success'), result)
+
+        result = TaskGroupService(self.admin).create({
+            'code': 'fs_n_with_threshold', 'completion_policy': 'N', 'threshold': 2,
+            'user_ids': [str(self.exec_a.id)],
+        })
+        self.assertTrue(result.get('success'), result)
+
+    def test_threshold_forbidden_outside_n_policy(self):
+        result = TaskGroupService(self.admin).create({
+            'code': 'fs_any_with_threshold', 'completion_policy': 'ANY', 'threshold': 2,
+            'user_ids': [str(self.exec_a.id)],
+        })
+        self.assertFalse(result.get('success'), result)
+
+    # --------------------------------------- delete guard across lineage
+
+    def test_delete_rejected_when_superseded_predecessor_has_in_flight_task(self):
+        # A task pinned to a superseded version is still "in review" for the
+        # purpose of blocking deletion of the current head - the whole
+        # lineage is retired together when the head is deleted.
+        group = self._group('fs_lin_g')
+        flow = self._create_flow('FS_LINEAGE', group)
+        old_step = flow.steps.get()
+        task = Task(
+            source='FsLineageSource', status=Task.Status.ACCEPTED,
+            executor_action_event=TasksManagementConfig.default_executor_event,
+            business_status={}, data={},
+            flow=flow, current_step=old_step, task_group=group,
+        )
+        task.save(username=self.admin.username)
+
+        replaced = self.service.replace({
+            'id': str(flow.id),
+            'steps': [{'task_group_id': str(group.id), 'completion_policy': None, 'threshold': None}],
+        })
+        self.assertTrue(replaced.get('success'), replaced)
+        new_flow_id = replaced['uuid_new_object']
+
+        # task is still pinned to the superseded v1, not the new head
+        task.refresh_from_db()
+        self.assertEqual(str(task.flow_id), str(flow.id))
+
+        result = self.service.delete({'id': new_flow_id})
+        self.assertFalse(result.get('success'), result)
+
