@@ -329,11 +329,17 @@ class TaskDecisionGQLType(DjangoObjectType):
     def get_queryset(cls, queryset, info):
         # Same visibility rule as tasks: privileged users see everything,
         # executors see the decisions of tasks assigned to their groups.
+        # taskexecutor__is_deleted=False: a removed membership must not keep
+        # granting visibility into a task's decision ledger. distinct() is
+        # required once that join is added - a task can match through more
+        # than one live executor row for the same user/group pairing history,
+        # which would otherwise duplicate every decision node.
         user = info.context.user
         if user.is_imis_admin or is_task_triage(user):
             return queryset.filter(is_deleted=False)
         return queryset.filter(
-            Q(task__task_group__taskexecutor__user=user)
+            Q(task__task_group__taskexecutor__user=user,
+              task__task_group__taskexecutor__is_deleted=False)
             & ~Q(task__status=Task.Status.RECEIVED),
             is_deleted=False,
-        )
+        ).distinct()

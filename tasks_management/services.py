@@ -100,6 +100,18 @@ class TaskService(BaseService):
                     "group is managed by step advancement and cannot be reassigned"
                     % (task.id, task.flow.code)
                 )
+            incoming_status = obj_data.get('status')
+            if incoming_status in (Task.Status.COMPLETED, Task.Status.FAILED):
+                # A privileged resolver votes through resolve_task like anyone
+                # else - complete_task() is the only legitimate way to close a
+                # task, and it is reached through step evaluation, not here.
+                # Without this, task-update rights alone (no flow membership,
+                # no vote, no ledger entry) would force-close a task mid-review.
+                raise ValidationError(
+                    "tasks_management.flow: task '%s' belongs to flow '%s' - it can "
+                    "only be closed by completing its current step, not by setting "
+                    "status directly" % (task.id, task.flow.code)
+                )
         return super().update(obj_data)
 
     def _pop_flow_assignment(self, obj_data):
@@ -116,6 +128,12 @@ class TaskService(BaseService):
         obj_data = dict(obj_data)
         flow_id = obj_data.pop('flow_id', None)
         detach = obj_data.pop('detach_flow', False)
+        if flow_id and detach:
+            raise ValidationError(
+                "tasks_management.flow: flowId and detachFlow are mutually "
+                "exclusive - a caller cannot attach and detach in the same "
+                "update"
+            )
         if flow_id:
             return obj_data, flow_id
         if detach:
@@ -175,6 +193,13 @@ class TaskService(BaseService):
         except Exception as exc:
             return output_exception(model_name=self.OBJECT_TYPE.__name__, method="complete", exception=exc)
 
+    # AFTER-signal handlers (this module's own flow branch included) can raise
+    # ValidationError once vote recording/evaluation is underway; without this
+    # wrapper the business_status merge below has already committed by the
+    # time that happens, so the mutation reports failure while the invalid
+    # vote is left persisted. @transaction.atomic makes the merge and every
+    # AFTER handler one unit, matching create()'s existing pattern.
+    @transaction.atomic
     @register_service_signal('task_service.resolve_task')
     def resolve_task(self, obj_data):
         try:
@@ -299,8 +324,15 @@ class TaskGroupService(BaseService):
                 task_group_id=id, is_deleted=False,
                 flow__is_deleted=False, flow__replacement_uuid__isnull=True,
             ).select_related('flow').first()
+            # Not just the task's current step: an in-flight task's pinned
+            # flow version can have a *later* step using this group too - it
+            # has not reached that step yet, so current_step would not catch
+            # it, but deleting the group now would still hand the task an
+            # executor-less pool once it advances. Join through the task's
+            # own pinned flow's live steps rather than its current position.
             in_flight_ref = Task.objects.filter(
-                current_step__task_group_id=id, is_deleted=False,
+                flow__steps__task_group_id=id, flow__steps__is_deleted=False,
+                is_deleted=False,
                 status__in=[Task.Status.RECEIVED, Task.Status.ACCEPTED],
             ).exists()
             if head_step_ref or in_flight_ref:
@@ -455,14 +487,16 @@ class TaskFlowService(BaseService):
         try:
             with transaction.atomic():
                 flow = self.OBJECT_TYPE.objects.get(id=obj_data['id'])
+                lineage = self._lineage(flow)
                 in_flight = Task.objects.filter(
-                    flow=flow, is_deleted=False,
+                    flow__in=lineage, is_deleted=False,
                     status__in=[Task.Status.RECEIVED, Task.Status.ACCEPTED],
                 ).count()
                 if in_flight:
                     raise ValidationError(
-                        "tasks_management.flow: flow '%s' has %s task(s) still in "
-                        "review - resolve them before deleting the flow"
+                        "tasks_management.flow: flow '%s' (or a version it "
+                        "superseded) has %s task(s) still in review - resolve "
+                        "them before deleting the flow"
                         % (flow.code, in_flight))
                 sources = (flow.json_ext or {}).get('task_sources', [])
                 if sources and not flow.replacement_uuid:
@@ -478,6 +512,28 @@ class TaskFlowService(BaseService):
                 return super().delete(obj_data)
         except Exception as exc:
             return output_exception(model_name=self.OBJECT_TYPE.__name__, method="delete", exception=exc)
+
+    def _lineage(self, flow):
+        """
+        Every version behind `flow`, walking replacement_uuid back to the
+        original. A head being deleted also retires its whole predecessor
+        chain (see _retire_superseded_versions), so the in-flight check has
+        to cover that same set - a task pinned to a superseded predecessor is
+        still "in review" for the purpose of blocking this delete, even
+        though it is invisible if the caller only looks at the head.
+        """
+        lineage = [flow.id]
+        seen = {flow.id}
+        current = flow
+        while True:
+            predecessor = self.OBJECT_TYPE.objects.filter(
+                replacement_uuid=current.id, is_deleted=False,
+            ).first()
+            if not predecessor or predecessor.id in seen:
+                return lineage
+            seen.add(predecessor.id)
+            lineage.append(predecessor.id)
+            current = predecessor
 
     def _retire_superseded_versions(self, flow):
         """

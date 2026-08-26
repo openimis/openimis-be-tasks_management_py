@@ -15,6 +15,7 @@ class TaskDataMixin:
     task_group_add_payload_n = {
         "code": "example_n",
         "completion_policy": TaskGroup.TaskGroupCompletionPolicy.N,
+        "threshold": 1,
     }
 
     task_payload = {

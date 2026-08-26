@@ -97,3 +97,36 @@ msgstr "Tasks from %(source)s are resolved per record, so they cannot follow an 
 msgid "tasks_management.validation.task_flow_assignment.custom_executor_event"
 msgstr "This task is resolved through the %(event)s action, which does not advance approval flows."
 
+
+msgid "tasks_management.validation.task_flow.code_exists"
+msgstr "Approval flow code %(code)s is already in use."
+
+msgid "tasks_management.validation.task_flow.ineligible_sources"
+msgstr "These sources cannot be bound to an approval flow: %(sources)s."
+
+msgid "tasks_management.validation.task_flow.no_steps"
+msgstr "An approval flow needs at least one step."
+
+msgid "tasks_management.validation.task_flow.step_group_missing"
+msgstr "Step %(order)s refers to a task group that no longer exists."
+
+msgid "tasks_management.validation.task_flow.step_policy_invalid"
+msgstr "Step %(order)s has an unrecognized completion policy: %(policy)s."
+
+msgid "tasks_management.validation.task_flow.step_pool_empty"
+msgstr "Step %(order)s's executor pool %(group)s has no members."
+
+msgid "tasks_management.validation.task_flow.step_threshold_exceeds_pool"
+msgstr "Step %(order)s needs %(threshold)s approvals, but its pool %(pool)s has fewer members."
+
+msgid "tasks_management.validation.task_flow.step_threshold_forbidden"
+msgstr "Step %(order)s has a threshold, but its policy is not N."
+
+msgid "tasks_management.validation.task_flow.step_threshold_required"
+msgstr "Step %(order)s uses policy N and needs a threshold of at least 1."
+
+msgid "tasks_management.validation.task_group.threshold_forbidden"
+msgstr "A threshold is only used with completion policy N."
+
+msgid "tasks_management.validation.task_group.threshold_required"
+msgstr "Completion policy N needs a threshold of at least 1."

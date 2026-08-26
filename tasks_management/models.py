@@ -23,8 +23,13 @@ class TaskGroup(HistoryModel):
     class Meta:
         constraints = [
             models.CheckConstraint(
+                # threshold__isnull=False is required, not redundant with
+                # __gte=1: Postgres treats a NULL check-expression result as
+                # passing, and 'N' AND (NULL >= 1) evaluates to NULL, not
+                # FALSE - a policy=N row with threshold=NULL would otherwise
+                # slip through silently instead of being rejected.
                 check=(
-                    Q(completion_policy='N', threshold__gte=1)
+                    Q(completion_policy='N', threshold__isnull=False, threshold__gte=1)
                     | (~Q(completion_policy='N') & Q(threshold__isnull=True))
                 ),
                 name='task_group_threshold_matches_policy',
@@ -105,11 +110,13 @@ class TaskFlowStep(HistoryBusinessModel):
                 name='unique_task_flow_step_order',
             ),
             # CHECK passes on UNKNOWN, so every branch pins the NULLness of
-            # completion_policy; a NULL (inherit) policy carries no threshold.
+            # completion_policy AND of threshold - threshold__gte=1 alone
+            # evaluates to NULL (not FALSE) when threshold is NULL, which
+            # would let a policy=N, threshold=NULL row silently through.
             models.CheckConstraint(
                 check=(
                     Q(completion_policy__isnull=True, threshold__isnull=True)
-                    | Q(completion_policy__isnull=False, completion_policy='N', threshold__gte=1)
+                    | Q(completion_policy='N', threshold__isnull=False, threshold__gte=1)
                     | Q(completion_policy__in=['ALL', 'ANY'], threshold__isnull=True)
                 ),
                 name='task_flow_step_threshold_matches_policy',

@@ -1,4 +1,5 @@
 from django.core.management.base import BaseCommand, CommandError
+from django.db import transaction
 
 from core.models import User
 from tasks_management.services import TaskFlowService, TaskGroupService
@@ -20,7 +21,14 @@ class Command(BaseCommand):
         parser.add_argument('--username', required=True, help='Acting admin user')
         parser.add_argument('--code', default='DEMO_FLOW', help='Flow code (default DEMO_FLOW)')
 
+    @transaction.atomic
     def handle(self, *args, **options):
+        """
+        Atomic end to end: a failure partway through (e.g. the second group's
+        code already exists from a prior partial run) must not leave the
+        first group committed - a retry would then fail again on that
+        already-created group, needing manual cleanup before it can proceed.
+        """
         admin = User.objects.filter(username=options['username']).first()
         if not admin:
             raise CommandError("User '%s' not found" % options['username'])

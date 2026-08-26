@@ -19,6 +19,9 @@ class CreateTaskGroupInput(OpenIMISMutation.Input):
 
     code = graphene.String(required=True, max_length=255)
     completion_policy = graphene.Field(TaskGroupCompletionPolicyEnum, required=True)
+    # Required for N, forbidden otherwise - mirrors TaskFlowStep's own
+    # threshold field and validate_task_group's check on it.
+    threshold = graphene.Int(required=False)
     user_ids = graphene.List(graphene.UUID)
     task_sources = graphene.List(graphene.String)
 

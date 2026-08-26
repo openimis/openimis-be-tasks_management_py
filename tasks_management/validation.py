@@ -73,10 +73,17 @@ class TaskValidation(BaseModelValidation, ObjectExistsValidationMixin):
 
 
 def validate_task_group(data, uuid=None):
-    return [
+    errors = [
         *validate_not_empty_field(data.get("code"), "code"),
         *validate_unique_task_source(data.get("task_sources"), uuid)
     ]
+    policy = data.get('completion_policy')
+    threshold = data.get('threshold')
+    if policy == TaskGroup.TaskGroupCompletionPolicy.N and not threshold:
+        errors.append({"message": _("tasks_management.validation.task_group.threshold_required")})
+    if policy != TaskGroup.TaskGroupCompletionPolicy.N and threshold is not None:
+        errors.append({"message": _("tasks_management.validation.task_group.threshold_forbidden")})
+    return errors
 
 
 def validate_task_executor(data, uuid=None):
@@ -276,7 +283,12 @@ def validate_task_flow_assignment(task, flow, detach=False):
         errors.append({"message": _(
             "tasks_management.validation.task_flow_assignment.task_closed"
         ) % {'status': task.status}})
-    if TaskDecision.objects.filter(task=task, is_deleted=False).exists():
+    # TaskDecision dual-writes every flat vote cast through this module, but a
+    # task resolved before that write path existed can carry votes recorded
+    # only in the legacy business_status map. Treat that the same as a ledger
+    # row - the invariant is "voting has started", not "the ledger has rows".
+    has_decisions = TaskDecision.objects.filter(task=task, is_deleted=False).exists()
+    if has_decisions or task.business_status:
         errors.append({"message": _(
             "tasks_management.validation.task_flow_assignment.decisions_exist")})
 

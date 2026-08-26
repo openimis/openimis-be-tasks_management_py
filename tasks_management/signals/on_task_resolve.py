@@ -1,3 +1,4 @@
+import datetime
 import logging
 
 from django.core.exceptions import ValidationError
@@ -57,21 +58,38 @@ def _record_flat_decisions(_task, _user, _verdict):
                     task=_task, user=_user, decision=_verdict,
                 ).save(username=_user.login_name)
         elif isinstance(_verdict, dict):
+            # A CSV import can carry thousands of rows; one exists() query and
+            # one save() per record would turn a single approval into
+            # thousands of round trips. Load this user's existing record ids
+            # for this task once, then bulk_create only the new ones -
+            # set_pk()/user_created/date_created replicate what save() does
+            # on first insert (this is an insert-only ledger, so there is no
+            # update path to also cover).
             per_record = (
                 (TaskDecision.Decision.APPROVED, _verdict.get('ACCEPT') or []),
                 (TaskDecision.Decision.REJECTED, _verdict.get('REJECT') or []),
             )
+            existing_ids = set(TaskDecision.objects.filter(
+                task=_task, flow_step__isnull=True, user=_user, is_deleted=False,
+            ).values_list('record_id', flat=True))
+            now = datetime.datetime.now()
+            new_decisions = []
+            seen_ids = set()
             for decision, record_ids in per_record:
                 for record_id in record_ids:
                     record_id = str(record_id)
-                    exists = TaskDecision.objects.filter(
-                        task=_task, flow_step__isnull=True, user=_user,
-                        record_id=record_id, is_deleted=False,
-                    ).exists()
-                    if not exists:
-                        TaskDecision(
-                            task=_task, user=_user, decision=decision, record_id=record_id,
-                        ).save(username=_user.login_name)
+                    if record_id in existing_ids or record_id in seen_ids:
+                        continue
+                    seen_ids.add(record_id)
+                    row = TaskDecision(
+                        task=_task, user=_user, decision=decision, record_id=record_id,
+                        user_created=_user, user_updated=_user,
+                        date_created=now, date_updated=now,
+                    )
+                    row.set_pk()
+                    new_decisions.append(row)
+            if new_decisions:
+                TaskDecision.objects.bulk_create(new_decisions)
     except Exception as exc:
         logger.error(
             "tasks_management.flow: failed to mirror flat vote into TaskDecision "
@@ -95,6 +113,13 @@ def _is_batch_task(_task):
 
 
 def _validate_flow_vote(_task, _step, _user, _verdict):
+    """
+    Shape validation and membership are independent gates - shape decides
+    which kind of verdict this task accepts, membership decides who may cast
+    one. A direct TaskService.resolve_task caller (GraphQL enforces this
+    separately, but is not the only entry point) must pass both regardless of
+    which shape branch it took.
+    """
     if isinstance(_verdict, dict):
         if not _is_batch_task(_task):
             raise ValidationError(
@@ -107,17 +132,18 @@ def _validate_flow_vote(_task, _step, _user, _verdict):
                 "tasks_management.flow: per-record vote on task '%s' names no "
                 "records" % _task.id
             )
-        return
-    if _is_batch_task(_task):
-        raise ValidationError(
-            "tasks_management.flow: source '%s' is a batch source and must submit a "
-            "per-record vote, not '%s'" % (_task.source, _verdict)
-        )
-    if _verdict not in _FLOW_VERDICTS:
-        raise ValidationError(
-            "tasks_management.flow: unsupported verdict '%s' for a flow task - "
-            "accepted values: %s" % (_verdict, ", ".join(_FLOW_VERDICTS))
-        )
+    else:
+        if _is_batch_task(_task):
+            raise ValidationError(
+                "tasks_management.flow: source '%s' is a batch source and must submit "
+                "a per-record vote, not '%s'" % (_task.source, _verdict)
+            )
+        if _verdict not in _FLOW_VERDICTS:
+            raise ValidationError(
+                "tasks_management.flow: unsupported verdict '%s' for a flow task - "
+                "accepted values: %s" % (_verdict, ", ".join(_FLOW_VERDICTS))
+            )
+
     is_executor = TaskExecutor.objects.filter(
         task_group_id=_step.task_group_id, user=_user,
         is_deleted=False, task_group__is_deleted=False,
@@ -179,29 +205,41 @@ def _record_batch_decisions(_task, _step, _user, _verdict):
     (check-then-insert under the caller's lock, mirroring the whole-task path:
     an IntegrityError inside the atomic block would poison the transaction).
 
+    This runs inside resolve_flow_task's select_for_update block, so one
+    query to load existing ids plus one bulk_create - instead of a query and
+    a save() per record - matters even more here than in the flat path: a CSV
+    approval with thousands of rows would otherwise hold the task's row lock
+    for the length of thousands of round trips, blocking every other voter.
+
     Returns True when at least one new decision was recorded.
     """
-    recorded = False
     per_record = (
         (TaskDecision.Decision.APPROVED, _verdict.get('ACCEPT') or []),
         (TaskDecision.Decision.REJECTED, _verdict.get('REJECT') or []),
     )
+    existing_ids = set(TaskDecision.objects.filter(
+        task=_task, flow_step=_step, user=_user, is_deleted=False,
+    ).values_list('record_id', flat=True))
+    now = datetime.datetime.now()
+    new_decisions = []
+    seen_ids = set()
     for decision, record_ids in per_record:
         for record_id in record_ids:
             record_id = str(record_id)
-            if not record_id:
+            if not record_id or record_id in existing_ids or record_id in seen_ids:
                 continue
-            exists = TaskDecision.objects.filter(
-                task=_task, flow_step=_step, user=_user,
-                record_id=record_id, is_deleted=False,
-            ).exists()
-            if exists:
-                continue
-            TaskDecision(
+            seen_ids.add(record_id)
+            row = TaskDecision(
                 task=_task, flow_step=_step, user=_user,
                 decision=decision, record_id=record_id,
-            ).save(username=_user.login_name)
-            recorded = True
+                user_created=_user, user_updated=_user,
+                date_created=now, date_updated=now,
+            )
+            row.set_pk()
+            new_decisions.append(row)
+    if new_decisions:
+        TaskDecision.objects.bulk_create(new_decisions)
+    recorded = bool(new_decisions)
     return recorded
 
 
@@ -336,6 +374,30 @@ def _evaluate_step(_task, _step, _user):
     return _advance_or_complete(_task, _step, _user)
 
 
+def _claim_terminal_transition(_task, outcome, _user):
+    """
+    Write the terminal status while still holding the caller's row lock, so a
+    concurrent voter's own locked re-read sees a non-ACCEPTED status and bails
+    at this function's existing guard instead of also deciding the step has
+    passed. Without this, two votes that each pass the step under their own
+    lock (the lock only serializes the read-evaluate-write of one call at a
+    time, it does not remember a decision made by a prior holder) would both
+    proceed to call complete_task() after releasing the lock, running every
+    consumer completion handler twice.
+
+    TaskService.complete_task() still runs the actual completion afterwards,
+    outside the lock, exactly once - for whichever call's outcome is non-None,
+    since a racer that lost the claim never computes one. The status write
+    here is deliberately redundant with what complete_task() does; the point
+    is not the value, it is making the transition visible to a racer before
+    the lock is released.
+    """
+    if outcome not in ('completed', 'failed'):
+        return
+    _task.status = Task.Status.FAILED if outcome == 'failed' else Task.Status.COMPLETED
+    _task.save(username=_user.login_name)
+
+
 def re_evaluate_flow_task(_task_id, _user):
     """
     Ops re-evaluation of a flow task's current step without recording a vote.
@@ -355,6 +417,7 @@ def re_evaluate_flow_task(_task_id, _user):
             return
         outcome = (_evaluate_batch_step if _is_batch_task(_task) else _evaluate_step)(
             _task, _task.current_step, _user)
+        _claim_terminal_transition(_task, outcome, _user)
     if outcome == 'failed':
         TaskService(_user).complete_task({"id": _task_id, 'failed': True})
     elif outcome == 'completed':
@@ -363,11 +426,12 @@ def re_evaluate_flow_task(_task_id, _user):
 
 def resolve_flow_task(_task_id, _user, _verdict):
     """
-    Flow branch of task resolution. Vote recording, step evaluation and
-    advancement run inside one transaction under select_for_update on the
-    task row; completion runs after the lock is released so consumer
-    handlers never execute third-party writes inside the vote transaction.
-    ValidationErrors deliberately propagate to the mutation layer.
+    Flow branch of task resolution. Vote recording, step evaluation,
+    advancement and the terminal status claim (see _claim_terminal_transition)
+    run inside one transaction under select_for_update on the task row;
+    complete_task's consumer-facing side effects run after the lock is
+    released so a slow or failing handler never holds the lock or rolls back
+    the vote. ValidationErrors deliberately propagate to the mutation layer.
     """
     outcome = None
     with transaction.atomic():
@@ -420,6 +484,8 @@ def resolve_flow_task(_task_id, _user, _verdict):
                 ).save(username=_user.login_name)
 
             outcome = _evaluate_step(_task, step, _user)
+
+        _claim_terminal_transition(_task, outcome, _user)
 
     if outcome == 'failed':
         TaskService(_user).complete_task({"id": _task.id, 'failed': True})

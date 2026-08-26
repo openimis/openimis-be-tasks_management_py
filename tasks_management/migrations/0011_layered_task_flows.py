@@ -234,7 +234,7 @@ class Migration(migrations.Migration):
         migrations.RunPython(_backfill_n_policy_threshold, _reverse_n_policy_threshold),
         migrations.AddConstraint(
             model_name='taskgroup',
-            constraint=models.CheckConstraint(check=models.Q(models.Q(('completion_policy', 'N'), ('threshold__gte', 1)), models.Q(models.Q(('completion_policy', 'N'), _negated=True), ('threshold__isnull', True)), _connector='OR'), name='task_group_threshold_matches_policy'),
+            constraint=models.CheckConstraint(check=models.Q(models.Q(('completion_policy', 'N'), ('threshold__gte', 1), ('threshold__isnull', False)), models.Q(models.Q(('completion_policy', 'N'), _negated=True), ('threshold__isnull', True)), _connector='OR'), name='task_group_threshold_matches_policy'),
         ),
         migrations.AddField(
             model_name='taskflowstep',
@@ -394,7 +394,7 @@ class Migration(migrations.Migration):
         ),
         migrations.AddConstraint(
             model_name='taskflowstep',
-            constraint=models.CheckConstraint(check=models.Q(models.Q(('completion_policy__isnull', True), ('threshold__isnull', True)), models.Q(('completion_policy', 'N'), ('completion_policy__isnull', False), ('threshold__gte', 1)), models.Q(('completion_policy__in', ['ALL', 'ANY']), ('threshold__isnull', True)), _connector='OR'), name='task_flow_step_threshold_matches_policy'),
+            constraint=models.CheckConstraint(check=models.Q(models.Q(('completion_policy__isnull', True), ('threshold__isnull', True)), models.Q(('completion_policy', 'N'), ('threshold__gte', 1), ('threshold__isnull', False)), models.Q(('completion_policy__in', ['ALL', 'ANY']), ('threshold__isnull', True)), _connector='OR'), name='task_flow_step_threshold_matches_policy'),
         ),
         migrations.AddConstraint(
             model_name='taskflow',
