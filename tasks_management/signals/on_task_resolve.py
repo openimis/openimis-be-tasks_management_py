@@ -3,6 +3,7 @@ import logging
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from simple_history.utils import bulk_create_with_history
 
 from core.forms import User
 from tasks_management.apps import TasksManagementConfig
@@ -35,8 +36,30 @@ def resolve_task_any(_task, _user):
 
 
 def resolve_task_n(_task, _user):
-    # TODO for now hardcoded to any, to be updated
-    resolve_task_any(_task, _user)
+    """
+    N-of-M: complete once `threshold` executors have approved.
+
+    This previously delegated to resolve_task_any, so an N group completed on
+    the first approval. That was invisible while there was no threshold to
+    set; now that TaskGroup.threshold is part of the public API (and required
+    for N by a DB constraint), leaving it unused would ship a setting that
+    demonstrably does nothing. A group that somehow has no threshold holds
+    rather than silently falling back to ANY - the group is misconfigured,
+    and approving on one vote is the least safe reading of "N".
+    """
+    if 'FAILED' in _task.business_status.values():
+        TaskService(_user).complete_task({"id": _task.id, 'failed': True})
+        return
+    threshold = _task.task_group.threshold
+    if not threshold:
+        logger.error(
+            "tasks_management: task %s has policy N but its group '%s' has no "
+            "threshold; holding", _task.id, _task.task_group.code,
+        )
+        return
+    n_of_approves = sum(map('APPROVED'.__eq__, _task.business_status.values()))
+    if n_of_approves >= threshold:
+        TaskService(_user).complete_task({"id": _task.id})
 
 
 def _record_flat_decisions(_task, _user, _verdict):
@@ -65,10 +88,20 @@ def _record_flat_decisions(_task, _user, _verdict):
             # set_pk()/user_created/date_created replicate what save() does
             # on first insert (this is an insert-only ledger, so there is no
             # update path to also cover).
+            # Flat tasks never reach _validate_flow_vote, so the record lists
+            # are shaped here: a bare string is iterable and would otherwise
+            # be mirrored as one decision per character.
             per_record = (
                 (TaskDecision.Decision.APPROVED, _verdict.get('ACCEPT') or []),
                 (TaskDecision.Decision.REJECTED, _verdict.get('REJECT') or []),
             )
+            if any(not isinstance(ids, (list, tuple)) for _, ids in per_record):
+                logger.error(
+                    "tasks_management: per-record vote on flat task %s has a "
+                    "non-list ACCEPT/REJECT; not mirrored into TaskDecision",
+                    _task.id,
+                )
+                return
             existing_ids = set(TaskDecision.objects.filter(
                 task=_task, flow_step__isnull=True, user=_user, is_deleted=False,
             ).values_list('record_id', flat=True))
@@ -78,7 +111,7 @@ def _record_flat_decisions(_task, _user, _verdict):
             for decision, record_ids in per_record:
                 for record_id in record_ids:
                     record_id = str(record_id)
-                    if record_id in existing_ids or record_id in seen_ids:
+                    if not record_id.strip() or record_id in existing_ids or record_id in seen_ids:
                         continue
                     seen_ids.add(record_id)
                     row = TaskDecision(
@@ -89,7 +122,11 @@ def _record_flat_decisions(_task, _user, _verdict):
                     row.set_pk()
                     new_decisions.append(row)
             if new_decisions:
-                TaskDecision.objects.bulk_create(new_decisions)
+                # bulk_create emits no post_save, and HistoryModel's history is
+                # simple-history (signal driven) - a plain bulk_create would
+                # leave these rows with no HistoricalTaskDecision entry while
+                # whole-task decisions still get one.
+                bulk_create_with_history(new_decisions, TaskDecision)
     except Exception as exc:
         logger.error(
             "tasks_management.flow: failed to mirror flat vote into TaskDecision "
@@ -127,10 +164,35 @@ def _validate_flow_vote(_task, _step, _user, _verdict):
                 "is not a batch source - add '%s' to flow_batch_sources, or remove "
                 "the flow binding" % (_task.source, _task.source)
             )
-        if not (_verdict.get('ACCEPT') or _verdict.get('REJECT')):
+        # Shape the record lists strictly rather than relying on truthiness:
+        # a bare string is iterable, so it would otherwise be recorded as one
+        # decision per character, and an id in both lists would silently
+        # resolve to whichever list is read first.
+        accepted, rejected = _verdict.get('ACCEPT'), _verdict.get('REJECT')
+        for name, ids in (('ACCEPT', accepted), ('REJECT', rejected)):
+            if ids is not None and not isinstance(ids, (list, tuple)):
+                raise ValidationError(
+                    "tasks_management.flow: '%s' in a per-record vote on task '%s' "
+                    "must be a list of record ids, got %s"
+                    % (name, _task.id, type(ids).__name__)
+                )
+            if any(not str(record_id).strip() for record_id in (ids or [])):
+                raise ValidationError(
+                    "tasks_management.flow: '%s' in a per-record vote on task '%s' "
+                    "contains a blank record id" % (name, _task.id)
+                )
+        accepted_ids = {str(record_id) for record_id in (accepted or [])}
+        rejected_ids = {str(record_id) for record_id in (rejected or [])}
+        if not (accepted_ids or rejected_ids):
             raise ValidationError(
                 "tasks_management.flow: per-record vote on task '%s' names no "
                 "records" % _task.id
+            )
+        overlap = accepted_ids & rejected_ids
+        if overlap:
+            raise ValidationError(
+                "tasks_management.flow: per-record vote on task '%s' both accepts "
+                "and rejects record(s) %s" % (_task.id, ", ".join(sorted(overlap)))
             )
     else:
         if _is_batch_task(_task):
@@ -238,7 +300,8 @@ def _record_batch_decisions(_task, _step, _user, _verdict):
             row.set_pk()
             new_decisions.append(row)
     if new_decisions:
-        TaskDecision.objects.bulk_create(new_decisions)
+        # See _record_flat_decisions: bulk_create bypasses simple-history.
+        bulk_create_with_history(new_decisions, TaskDecision)
     recorded = bool(new_decisions)
     return recorded
 
@@ -519,10 +582,17 @@ def on_task_resolve(**kwargs):
         task = Task.objects.select_related('task_group').prefetch_related('task_group__taskexecutor_set').get(
             id=data["task"]["id"])
         user = User.objects.get(id=data["user"]["id"])
-        # The caller's verdict comes from the signal payload (the in-memory
-        # post-merge representation, which always contains this caller's key)
-        # - NOT from a DB re-read, which loses votes under concurrent merges.
-        verdict = (payload_task.get('business_status') or {}).get(str(user.id))
+        # Prefer the request's own verdict, which resolve_task carries
+        # separately. business_status is the deep-MERGED history: its lists
+        # are concatenated across steps, so a reviewer who sits in two steps'
+        # pools would see their step-1 ids replayed against step 2, and an id
+        # appearing in both ACCEPT and REJECT collapses to whichever is read
+        # first. Fall back to the merged blob only for callers that predate
+        # the extra payload key.
+        incoming_status = data.get('incoming_status')
+        if incoming_status is None:
+            incoming_status = payload_task.get('business_status') or {}
+        verdict = incoming_status.get(str(user.id))
     except Exception as e:
         logger.error("Error while executing on_task_resolve", exc_info=e)
         return [str(e)]

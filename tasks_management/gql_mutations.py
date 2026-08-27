@@ -134,7 +134,12 @@ class DeleteTaskGroupMutation(BaseHistoryModelDeleteMutationMixin, BaseMutation)
         if ids:
             with transaction.atomic():
                 for id in ids:
-                    service.delete({'id': id, 'user': user})
+                    # The service can now refuse a delete (a group used as a
+                    # flow step pool); discarding the result would report
+                    # GraphQL success while nothing was deleted.
+                    response = service.delete({'id': id, 'user': user})
+                    if response and not response.get('success'):
+                        raise ValidationError(str(response))
 
     class Input(OpenIMISMutation.Input):
         ids = graphene.List(graphene.UUID)

@@ -46,10 +46,12 @@ class TaskFlow(HistoryBusinessModel):
     filtering keep working unchanged.
 
     Versioned via HistoryBusinessModel: semantic edits must go through
-    replace_object(), which supersedes this row (replacement_uuid set,
-    further updates blocked by core) and creates a new head version, so
-    in-flight tasks keep following the version they started on. Replacing
-    a flow does not clone its steps - the service layer must re-create
+    TaskFlowService.replace(), which supersedes this row (replacement_uuid
+    set, further updates blocked by core) and creates a new head version, so
+    in-flight tasks keep following the version they started on. The service
+    performs that supersession itself rather than calling core's
+    replace_object(), which would trip the head-code uniqueness constraint
+    below. Replacing a flow does not clone its steps - the service re-creates
     TaskFlowStep rows for the new version.
     """
     code = models.CharField(max_length=255, null=False, blank=False)

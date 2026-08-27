@@ -334,12 +334,16 @@ class TaskDecisionGQLType(DjangoObjectType):
         # required once that join is added - a task can match through more
         # than one live executor row for the same user/group pairing history,
         # which would otherwise duplicate every decision node.
+        # task__is_deleted=False on both branches: a deleted task is invisible
+        # in the task queryset, so its decision ledger must not remain
+        # readable either.
         user = info.context.user
         if user.is_imis_admin or is_task_triage(user):
-            return queryset.filter(is_deleted=False)
+            return queryset.filter(is_deleted=False, task__is_deleted=False)
         return queryset.filter(
             Q(task__task_group__taskexecutor__user=user,
               task__task_group__taskexecutor__is_deleted=False)
             & ~Q(task__status=Task.Status.RECEIVED),
             is_deleted=False,
+            task__is_deleted=False,
         ).distinct()

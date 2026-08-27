@@ -127,3 +127,48 @@ class GqlFlowTestCase(TestCase):
 
         with self.assertRaises(PermissionError):
             self._targets(self.outsider)
+
+    def test_deleted_task_decisions_are_not_visible(self):
+        """
+        The task queryset hides deleted tasks; the decision ledger must not
+        stay readable after its task is deleted, for privileged users either.
+        """
+        task = Task(
+            source='gql_del_source', status=Task.Status.ACCEPTED,
+            executor_action_event=TasksManagementConfig.default_executor_event,
+            business_status={}, data={}, business_event='gql_event',
+            task_group=self.group,
+        )
+        task.save(username=self.admin.username)
+        decision = TaskDecision(task=task, user=self.executor,
+                                decision=TaskDecision.Decision.APPROVED)
+        decision.save(username=self.admin.username)
+
+        def visible_to(user):
+            info = SimpleNamespace(context=SimpleNamespace(user=user))
+            return TaskDecisionGQLType.get_queryset(TaskDecision.objects.all(), info)
+
+        self.assertIn(decision, visible_to(self.admin))
+        task.delete(username=self.admin.username)
+        self.assertNotIn(decision, visible_to(self.admin))
+        self.assertNotIn(decision, visible_to(self.executor))
+
+    def test_delete_task_group_mutation_surfaces_service_refusal(self):
+        """
+        The service refuses to delete a group still used as a flow step pool.
+        The mutation used to discard that result, reporting GraphQL success
+        while nothing was deleted.
+        """
+        from tasks_management.gql_mutations import DeleteTaskGroupMutation
+
+        pool = TaskGroup(code='gql_pool_in_use', completion_policy='ANY')
+        pool.save(username=self.admin.username)
+        flow = TaskFlow(code='GQL_POOL_FLOW', name='pool flow')
+        flow.save(username=self.admin.username)
+        TaskFlowStep(flow=flow, task_group=pool, order=1).save(username=self.admin.username)
+
+        with self.assertRaises(ValidationError):
+            DeleteTaskGroupMutation._mutate(self.admin, ids=[str(pool.id)])
+
+        pool.refresh_from_db()
+        self.assertFalse(pool.is_deleted)

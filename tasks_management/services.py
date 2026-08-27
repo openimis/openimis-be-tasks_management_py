@@ -87,10 +87,17 @@ class TaskService(BaseService):
 
     @register_service_signal('task_service.update')
     def update(self, obj_data):
-        task = self.OBJECT_TYPE.objects.filter(id=obj_data.get('id')).first()
         obj_data, assignment = self._pop_flow_assignment(obj_data)
         if assignment is not None:
-            return super().update(self._apply_flow_assignment(task, obj_data, assignment))
+            # Validating the assignment and persisting it must be one unit:
+            # otherwise a vote can land between "no decisions yet" and the
+            # save, and the stale assignment still wins - moving a task that
+            # has already been voted on to a different flow.
+            with transaction.atomic():
+                task = self.OBJECT_TYPE.objects.select_for_update(of=('self',)).filter(
+                    id=obj_data.get('id')).first()
+                return super().update(self._apply_flow_assignment(task, obj_data, assignment))
+        task = self.OBJECT_TYPE.objects.filter(id=obj_data.get('id')).first()
         if task and task.flow_id:
             incoming_group = obj_data.get('task_group_id', obj_data.get('task_group'))
             incoming_group_id = getattr(incoming_group, 'id', incoming_group)
@@ -209,7 +216,18 @@ class TaskService(BaseService):
             additional_data = obj_data.get('additional_data')
             self._update_task_business_status(obj, incoming_status, additional_data)
             self._insert_additional_data_to_json_ext(obj, additional_data)
-            return output_result_success({'task': model_representation(obj), 'user': {'id': f"{self.user.id}"}})
+            # incoming_status is THIS request's verdict, carried separately
+            # from the task's merged business_status. __deep_merge below
+            # concatenates lists, so for a per-record vote the merged blob
+            # accumulates every step's ids - a reviewer sitting in two steps'
+            # pools would have their earlier verdict replayed against the
+            # later step, and an id present in both lists resolves to the
+            # first one seen. Handlers must read the verdict from here.
+            return output_result_success({
+                'task': model_representation(obj),
+                'user': {'id': f"{self.user.id}"},
+                'incoming_status': incoming_status,
+            })
         except Exception as exc:
             return output_exception(model_name=self.OBJECT_TYPE.__name__, method="resolve", exception=exc)
 

@@ -92,7 +92,7 @@ msgid "tasks_management.validation.task_flow_assignment.flow_without_steps"
 msgstr "Approval flow %(code)s has no steps, so it cannot take on tasks."
 
 msgid "tasks_management.validation.task_flow_assignment.source_ineligible"
-msgstr "Tasks from %(source)s are resolved per record, so they cannot follow an approval flow."
+msgstr "Tasks from %(source)s use a resolution handler that approval flows cannot drive, so they cannot follow one."
 
 msgid "tasks_management.validation.task_flow_assignment.custom_executor_event"
 msgstr "This task is resolved through the %(event)s action, which does not advance approval flows."

@@ -466,3 +466,96 @@ class FlowResolverTestCase(TestCase):
         self.assertEqual(task.status, Task.Status.COMPLETED)
         self.assertEqual(task.version, version_after_completion)
 
+
+    # ------------------------------------------- review round 2 regressions
+
+    def test_reviewer_in_two_pools_keeps_later_step_rejection(self):
+        """
+        business_status is deep-merged and its lists are CONCATENATED, so by
+        the time the signal fires a reviewer who votes at two steps sees both
+        steps' ids in one blob. Reading the verdict from there replayed step
+        1's ACCEPT against step 2 and, because ACCEPT is processed first, the
+        step-2 REJECT of the same record was dropped - silently flipping a
+        rejection into an approval.
+        """
+        group1 = self._group('two_pool_1', 'ANY', executors=[self.exec_a])
+        group2 = self._group('two_pool_2', 'ANY', executors=[self.exec_a])
+        flow = self._flow('f_two_pool', (group1, None, None), (group2, None, None))
+        task = self._batch_task(flow)
+        step1, step2 = flow.steps.order_by('order')
+
+        self._vote(task, self.exec_a, {'ACCEPT': ['r1', 'r2']})
+        task.refresh_from_db()
+        self.assertEqual(task.current_step_id, step2.id)
+
+        # Same reviewer, next step, now rejecting r1.
+        self._vote(task, self.exec_a, {'REJECT': ['r1']})
+
+        step2_decisions = {
+            (d.record_id, d.decision)
+            for d in TaskDecision.objects.filter(
+                task=task, flow_step=step2, is_deleted=False)
+        }
+        self.assertIn(('r1', TaskDecision.Decision.REJECTED), step2_decisions)
+        # step 1's ids must not be replayed against step 2
+        self.assertNotIn(('r2', TaskDecision.Decision.APPROVED), step2_decisions)
+        self.assertNotIn(('r1', TaskDecision.Decision.APPROVED), step2_decisions)
+
+    def test_batch_vote_rejects_overlapping_record(self):
+        group1 = self._group('overlap_g', 'ANY', executors=[self.exec_a])
+        flow = self._flow('f_overlap', (group1, None, None))
+        task = self._batch_task(flow)
+
+        with self.assertRaises(ValidationError):
+            self._vote(task, self.exec_a, {'ACCEPT': ['r1'], 'REJECT': ['r1']})
+
+    def test_batch_vote_rejects_non_list_records(self):
+        group1 = self._group('nonlist_g', 'ANY', executors=[self.exec_a])
+        flow = self._flow('f_nonlist', (group1, None, None))
+        task = self._batch_task(flow)
+
+        # A bare string is iterable: without the shape check this recorded
+        # one decision per character.
+        with self.assertRaises(ValidationError):
+            self._vote(task, self.exec_a, {'ACCEPT': 'r1'})
+
+    def test_batch_vote_rejects_blank_record_id(self):
+        group1 = self._group('blank_g', 'ANY', executors=[self.exec_a])
+        flow = self._flow('f_blank', (group1, None, None))
+        task = self._batch_task(flow)
+
+        with self.assertRaises(ValidationError):
+            self._vote(task, self.exec_a, {'ACCEPT': ['r1', '  ']})
+
+    def test_batch_decisions_get_history_rows(self):
+        """
+        Per-record decisions are bulk-inserted; a plain bulk_create emits no
+        post_save, so simple-history would leave them with no historical row
+        while whole-task decisions still got one.
+        """
+        group1 = self._group('hist_g', 'ANY', executors=[self.exec_a])
+        flow = self._flow('f_hist', (group1, None, None))
+        task = self._batch_task(flow)
+
+        self._vote(task, self.exec_a, {'ACCEPT': ['r1', 'r2']})
+
+        rows = TaskDecision.objects.filter(task=task, is_deleted=False)
+        self.assertEqual(rows.count(), 2)
+        for row in rows:
+            self.assertEqual(row.history.count(), 1)
+
+    def test_flat_n_group_waits_for_threshold(self):
+        """
+        resolve_task_n used to delegate to resolve_task_any, completing on the
+        first approval and making TaskGroup.threshold a no-op setting.
+        """
+        group = self._group('flat_n', 'N', threshold=2, executors=[self.exec_a, self.exec_b])
+        task = self._flat_task(group)
+
+        self._vote(task, self.exec_a, 'APPROVED')
+        task.refresh_from_db()
+        self.assertEqual(task.status, Task.Status.ACCEPTED)
+
+        self._vote(task, self.exec_b, 'APPROVED')
+        task.refresh_from_db()
+        self.assertEqual(task.status, Task.Status.COMPLETED)
