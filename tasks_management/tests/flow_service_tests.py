@@ -1,0 +1,546 @@
+import uuid
+
+from django.core.exceptions import ValidationError
+from django.core.management import call_command
+from django.test import TestCase
+
+from core.test_helpers import create_test_interactive_user
+from tasks_management.apps import TasksManagementConfig
+from tasks_management.models import (
+    Task,
+    TaskDecision,
+    TaskExecutor,
+    TaskFlow,
+    TaskGroup,
+)
+from tasks_management.services import TaskFlowService, TaskGroupService, TaskService
+
+
+class FlowServiceTestCase(TestCase):
+    """
+    W3 coverage: TaskFlowService CRUD + custom atomic replace, source binding
+    and eligibility gates, group-deletion guard, task assignment precedence,
+    flow-task group reassignment guard, and the re_evaluate ops command.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = create_test_interactive_user(username="fs_admin")
+        cls.exec_a = create_test_interactive_user(username="fs_exec_a")
+        cls.exec_b = create_test_interactive_user(username="fs_exec_b")
+        cls.service = TaskFlowService(cls.admin)
+
+    def _group(self, code, policy='ANY', threshold=None, executors=None):
+        group = TaskGroup(code=code, completion_policy=policy, threshold=threshold)
+        group.save(username=self.admin.username)
+        for user in (executors if executors is not None else [self.exec_a]):
+            TaskExecutor(task_group=group, user=user).save(username=self.admin.username)
+        return group
+
+    def _flow_payload(self, code, group, **overrides):
+        payload = {
+            'code': code,
+            'name': code,
+            'task_sources': [],
+            'steps': [{'task_group_id': str(group.id), 'completion_policy': 'ANY', 'threshold': None}],
+        }
+        payload.update(overrides)
+        return payload
+
+    def _create_flow(self, code, group, **overrides):
+        result = self.service.create(self._flow_payload(code, group, **overrides))
+        self.assertTrue(result.get('success'), result)
+        return TaskFlow.objects.get(id=result['data']['id'])
+
+    # ---------------------------------------------------------------- create
+
+    def test_create_flow_with_steps_and_sources(self):
+        group1 = self._group('fs_g1')
+        group2 = self._group('fs_g2', executors=[self.exec_b])
+        result = self.service.create({
+            'code': 'FS_FLOW',
+            'name': 'demo',
+            'task_sources': ['FsSource'],
+            'steps': [
+                {'task_group_id': str(group1.id), 'completion_policy': None, 'threshold': None},
+                {'task_group_id': str(group2.id), 'completion_policy': 'ALL', 'threshold': None},
+            ],
+        })
+        self.assertTrue(result.get('success'), result)
+        flow = TaskFlow.objects.get(id=result['data']['id'])
+        self.assertEqual((flow.json_ext or {}).get('task_sources'), ['FsSource'])
+        steps = list(flow.steps.filter(is_deleted=False).order_by('order'))
+        self.assertEqual([s.order for s in steps], [1, 2])
+        self.assertIsNone(steps[0].completion_policy)
+        self.assertEqual(steps[1].completion_policy, 'ALL')
+
+    def test_create_rejects_bad_payloads(self):
+        group = self._group('fs_bad_g')
+        empty_group = TaskGroup(code='fs_empty_g', completion_policy='ANY')
+        empty_group.save(username=self.admin.username)
+
+        cases = {
+            'zero steps': self._flow_payload('FS_B1', group, steps=[]),
+            'empty pool': self._flow_payload('FS_B2', empty_group),
+            'N without threshold': self._flow_payload(
+                'FS_B3', group,
+                steps=[{'task_group_id': str(group.id), 'completion_policy': 'N', 'threshold': None}]),
+            'threshold on ANY': self._flow_payload(
+                'FS_B4', group,
+                steps=[{'task_group_id': str(group.id), 'completion_policy': 'ANY', 'threshold': 2}]),
+            'threshold above pool': self._flow_payload(
+                'FS_B5', group,
+                steps=[{'task_group_id': str(group.id), 'completion_policy': 'N', 'threshold': 5}]),
+            # claim_sampling stays ineligible: it resolves per-record at vote
+            # time. The CSV import sources moved to flow_batch_sources and are
+            # bindable now, covered on the batch path in flow_resolver_tests.
+            'ineligible source': self._flow_payload(
+                'FS_B6', group, task_sources=['claim_sampling']),
+        }
+        for label, payload in cases.items():
+            result = self.service.create(payload)
+            self.assertFalse(result.get('success'), f"{label} should fail: {result}")
+
+    def test_create_rejects_duplicate_head_code_and_bound_source(self):
+        group = self._group('fs_dup_g')
+        self._create_flow('FS_DUP', group, task_sources=['FsDupSource'])
+
+        dup_code = self.service.create(self._flow_payload('FS_DUP', group))
+        self.assertFalse(dup_code.get('success'))
+
+        dup_source = self.service.create(
+            self._flow_payload('FS_DUP2', group, task_sources=['FsDupSource']))
+        self.assertFalse(dup_source.get('success'))
+
+        group_service = TaskGroupService(self.admin)
+        group_bound = group_service.create({
+            'code': 'fs_dup_g2', 'completion_policy': 'ANY',
+            'user_ids': [str(self.exec_a.id)], 'task_sources': ['FsDupSource'],
+        })
+        self.assertFalse(group_bound.get('success'))
+
+    # ---------------------------------------------------------------- update
+
+    def test_update_name_and_sources_but_not_steps(self):
+        group = self._group('fs_upd_g')
+        flow = self._create_flow('FS_UPD', group)
+
+        same_steps = self.service.update({
+            'id': str(flow.id), 'code': 'FS_UPD', 'name': 'renamed',
+            'task_sources': ['FsUpdSource'],
+            'steps': [{'task_group_id': str(group.id), 'completion_policy': 'ANY', 'threshold': None}],
+        })
+        self.assertTrue(same_steps.get('success'), same_steps)
+        flow.refresh_from_db()
+        self.assertEqual(flow.name, 'renamed')
+        self.assertEqual((flow.json_ext or {}).get('task_sources'), ['FsUpdSource'])
+
+        changed_steps = self.service.update({
+            'id': str(flow.id), 'code': 'FS_UPD',
+            'steps': [{'task_group_id': str(group.id), 'completion_policy': 'ALL', 'threshold': None}],
+        })
+        self.assertFalse(changed_steps.get('success'))
+        self.assertIn('replaceTaskFlow', str(changed_steps))
+
+    # --------------------------------------------------------------- replace
+
+    def test_replace_supersedes_head_and_recreates_steps(self):
+        group1 = self._group('fs_rep_g1')
+        group2 = self._group('fs_rep_g2', executors=[self.exec_b])
+        flow = self._create_flow('FS_REP', group1, task_sources=['FsRepSource'])
+        old_step = flow.steps.get()
+
+        task = Task(
+            source='FsRepSource', status=Task.Status.ACCEPTED,
+            executor_action_event=TasksManagementConfig.default_executor_event,
+            business_status={}, data={},
+            flow=flow, current_step=old_step, task_group=group1,
+        )
+        task.save(username=self.admin.username)
+
+        result = self.service.replace({
+            'id': str(flow.id),
+            'steps': [
+                {'task_group_id': str(group1.id), 'completion_policy': None, 'threshold': None},
+                {'task_group_id': str(group2.id), 'completion_policy': None, 'threshold': None},
+            ],
+        })
+        self.assertTrue(result.get('success'), result)
+
+        flow.refresh_from_db()
+        new_flow = TaskFlow.objects.get(id=result['uuid_new_object'])
+        self.assertEqual(str(flow.replacement_uuid), str(new_flow.id))
+        self.assertIsNotNone(flow.date_valid_to)
+        self.assertEqual(new_flow.code, 'FS_REP')
+        self.assertIsNone(new_flow.replacement_uuid)
+        self.assertEqual(new_flow.steps.filter(is_deleted=False).count(), 2)
+        # old version keeps its steps for pinned in-flight tasks
+        self.assertEqual(flow.steps.filter(is_deleted=False).count(), 1)
+        task.refresh_from_db()
+        self.assertEqual(task.flow_id, flow.id)
+        self.assertEqual(task.current_step_id, old_step.id)
+
+        # replacing a superseded version is refused
+        again = self.service.replace({'id': str(flow.id)})
+        self.assertFalse(again.get('success'))
+
+        # new tasks bind to the new head
+        create_result = TaskService(self.admin).create({
+            'source': 'FsRepSource', 'status': Task.Status.RECEIVED,
+            'executor_action_event': TasksManagementConfig.default_executor_event,
+            'business_status': {}, 'data': {}, 'business_event': 'x',
+        })
+        self.assertTrue(create_result.get('success'), create_result)
+        new_task = Task.objects.get(id=create_result['data']['id'])
+        self.assertEqual(new_task.flow_id, new_flow.id)
+
+    # ---------------------------------------------------------------- delete
+
+    def test_delete_retires_superseded_versions(self):
+        group = self._group('fs_delrep_g')
+        flow = self._create_flow('FS_DELREP', group, task_sources=['FsDelRepSource'])
+
+        replaced = self.service.replace({
+            'id': str(flow.id),
+            'steps': [{'task_group_id': str(group.id), 'completion_policy': None, 'threshold': None}],
+        })
+        self.assertTrue(replaced.get('success'), replaced)
+        head = TaskFlow.objects.get(id=replaced['uuid_new_object'])
+
+        # Deleting the head must retire the whole lineage. Core's
+        # HistoryModel.delete un-links the predecessor of a deleted row, which
+        # would otherwise promote the superseded version back to head and
+        # violate the head-scoped unique code index.
+        result = self.service.delete({'id': str(head.id)})
+        self.assertTrue(result.get('success'), result)
+
+        head.refresh_from_db()
+        flow.refresh_from_db()
+        self.assertTrue(head.is_deleted)
+        self.assertTrue(flow.is_deleted)
+        # No live head is left holding the code, so it can be reused.
+        self.assertFalse(
+            TaskFlow.objects.filter(
+                code='FS_DELREP', is_deleted=False, replacement_uuid__isnull=True,
+            ).exists(),
+        )
+        recreated = self.service.create({
+            'code': 'FS_DELREP', 'name': 'recreated',
+            'task_sources': ['FsDelRepSource'],
+            'steps': [{'task_group_id': str(group.id), 'completion_policy': None, 'threshold': None}],
+        })
+        self.assertTrue(recreated.get('success'), recreated)
+
+    def test_delete_blocked_by_in_flight_tasks_then_allowed(self):
+        group = self._group('fs_del_g')
+        flow = self._create_flow('FS_DEL', group)
+        step = flow.steps.get()
+        task = Task(
+            source='FsDelSource', status=Task.Status.ACCEPTED,
+            executor_action_event=TasksManagementConfig.default_executor_event,
+            business_status={}, data={},
+            flow=flow, current_step=step, task_group=group,
+        )
+        task.save(username=self.admin.username)
+
+        blocked = self.service.delete({'id': str(flow.id)})
+        self.assertFalse(blocked.get('success'))
+
+        task.status = Task.Status.COMPLETED
+        task.save(username=self.admin.username)
+        allowed = self.service.delete({'id': str(flow.id)})
+        self.assertTrue(allowed.get('success'), allowed)
+        flow.refresh_from_db()
+        self.assertTrue(flow.is_deleted)
+        self.assertFalse(flow.steps.filter(is_deleted=False).exists())
+
+    def test_group_delete_blocked_while_head_step_pool(self):
+        group = self._group('fs_gdel_g')
+        self._create_flow('FS_GDEL', group)
+        group_service = TaskGroupService(self.admin)
+
+        blocked = group_service.delete({'id': str(group.id)})
+        self.assertFalse(blocked.get('success'))
+        group.refresh_from_db()
+        self.assertFalse(group.is_deleted)
+
+    # ------------------------------------------------------------ assignment
+
+    def test_task_create_assigns_flow_and_gates(self):
+        group = self._group('fs_asg_g')
+        self._create_flow('FS_ASG', group, task_sources=['FsAsgSource'])
+        service = TaskService(self.admin)
+
+        base = {
+            'status': Task.Status.RECEIVED, 'business_status': {}, 'data': {},
+            'business_event': 'x',
+            'executor_action_event': TasksManagementConfig.default_executor_event,
+        }
+        result = service.create({**base, 'source': 'FsAsgSource'})
+        task = Task.objects.get(id=result['data']['id'])
+        self.assertIsNotNone(task.flow_id)
+        self.assertEqual(task.current_step.order, 1)
+        self.assertEqual(task.task_group_id, group.id)
+        self.assertEqual(task.status, Task.Status.ACCEPTED)
+
+        # non-default executor event never binds a flow
+        result = service.create({**base, 'source': 'FsAsgSource',
+                                 'executor_action_event': 'custom_event'})
+        task = Task.objects.get(id=result['data']['id'])
+        self.assertIsNone(task.flow_id)
+
+    def test_flow_task_group_reassignment_rejected(self):
+        group = self._group('fs_reas_g')
+        other_group = self._group('fs_reas_g2', executors=[self.exec_b])
+        flow = self._create_flow('FS_REAS', group)
+        step = flow.steps.get()
+        task = Task(
+            source='FsReasSource', status=Task.Status.ACCEPTED,
+            executor_action_event=TasksManagementConfig.default_executor_event,
+            business_status={}, data={},
+            flow=flow, current_step=step, task_group=group,
+        )
+        task.save(username=self.admin.username)
+
+        with self.assertRaises(ValidationError):
+            TaskService(self.admin).update({
+                'id': task.id, 'task_group_id': str(other_group.id),
+            })
+
+    # -------------------------------------------------- manual flow assignment
+
+    def _flat_task(self, source, group, status=Task.Status.RECEIVED):
+        task = Task(
+            source=source, status=status,
+            executor_action_event=TasksManagementConfig.default_executor_event,
+            business_status={}, data={}, task_group=group,
+        )
+        task.save(username=self.admin.username)
+        return task
+
+    def test_assign_flow_to_existing_task(self):
+        pool = self._group('fs_asgn_pool')
+        landing = self._group('fs_asgn_landing', executors=[self.exec_b])
+        flow = self._create_flow('FS_ASGN', pool)
+        step = flow.steps.get()
+        task = self._flat_task('FsAsgnSource', landing)
+
+        result = TaskService(self.admin).update({'id': task.id, 'flow_id': str(flow.id)})
+        self.assertTrue(result.get('success'), result)
+
+        task.refresh_from_db()
+        self.assertEqual(task.flow_id, flow.id)
+        self.assertEqual(task.current_step_id, step.id)
+        # the group follows the step, not whatever the task carried before
+        self.assertEqual(task.task_group_id, pool.id)
+        self.assertEqual(task.status, Task.Status.ACCEPTED)
+
+    def test_assign_flow_ignores_a_group_sent_on_the_same_payload(self):
+        pool = self._group('fs_asgn2_pool')
+        other = self._group('fs_asgn2_other', executors=[self.exec_b])
+        flow = self._create_flow('FS_ASGN2', pool)
+        task = self._flat_task('FsAsgn2Source', other)
+
+        result = TaskService(self.admin).update({
+            'id': task.id, 'flow_id': str(flow.id), 'task_group_id': str(other.id),
+        })
+        self.assertTrue(result.get('success'), result)
+        task.refresh_from_db()
+        self.assertEqual(task.task_group_id, pool.id)
+
+    def test_assign_flow_rejects_unassignable_flows(self):
+        pool = self._group('fs_asgn3_pool')
+        flow = self._create_flow('FS_ASGN3', pool)
+        task = self._flat_task('FsAsgn3Source', pool)
+        service = TaskService(self.admin)
+
+        # unknown flow
+        with self.assertRaises(ValidationError):
+            service.update({'id': task.id, 'flow_id': str(uuid.uuid4())})
+
+        # a flow with no steps cannot take tasks on
+        stepless = TaskFlow(code='FS_ASGN3_EMPTY', name='empty')
+        stepless.save(username=self.admin.username)
+        with self.assertRaises(ValidationError):
+            service.update({'id': task.id, 'flow_id': str(stepless.id)})
+
+        # superseded versions keep their pinned tasks but take on no new ones
+        replaced = self.service.replace({
+            'id': str(flow.id),
+            'steps': [{'task_group_id': str(pool.id), 'completion_policy': None, 'threshold': None}],
+        })
+        self.assertTrue(replaced.get('success'), replaced)
+        with self.assertRaises(ValidationError):
+            service.update({'id': task.id, 'flow_id': str(flow.id)})
+
+        task.refresh_from_db()
+        self.assertIsNone(task.flow_id)
+
+    def test_assign_flow_rejected_for_closed_task(self):
+        pool = self._group('fs_asgn4_pool')
+        flow = self._create_flow('FS_ASGN4', pool)
+        task = self._flat_task('FsAsgn4Source', pool, status=Task.Status.COMPLETED)
+
+        with self.assertRaises(ValidationError):
+            TaskService(self.admin).update({'id': task.id, 'flow_id': str(flow.id)})
+
+    def test_assign_flow_rejected_once_decisions_exist(self):
+        pool = self._group('fs_asgn5_pool')
+        flow = self._create_flow('FS_ASGN5', pool)
+        other_flow = self._create_flow('FS_ASGN5B', pool)
+        task = self._flat_task('FsAsgn5Source', pool, status=Task.Status.ACCEPTED)
+        TaskDecision(
+            task=task, user=self.exec_a, decision=TaskDecision.Decision.APPROVED,
+        ).save(username=self.admin.username)
+
+        service = TaskService(self.admin)
+        with self.assertRaises(ValidationError):
+            service.update({'id': task.id, 'flow_id': str(flow.id)})
+        with self.assertRaises(ValidationError):
+            service.update({'id': task.id, 'flow_id': str(other_flow.id)})
+
+    def test_assign_flow_rejected_for_ineligible_tasks(self):
+        pool = self._group('fs_asgn6_pool')
+        flow = self._create_flow('FS_ASGN6', pool)
+        service = TaskService(self.admin)
+
+        ineligible_source = (TasksManagementConfig.flow_ineligible_sources or [])[0]
+        by_source = self._flat_task(ineligible_source, pool)
+        with self.assertRaises(ValidationError):
+            service.update({'id': by_source.id, 'flow_id': str(flow.id)})
+
+        custom_event = Task(
+            source='FsAsgn6Source', status=Task.Status.RECEIVED,
+            executor_action_event='custom_event',
+            business_status={}, data={}, task_group=pool,
+        )
+        custom_event.save(username=self.admin.username)
+        with self.assertRaises(ValidationError):
+            service.update({'id': custom_event.id, 'flow_id': str(flow.id)})
+
+    def test_detach_flow_returns_task_to_flat(self):
+        pool = self._group('fs_det_pool')
+        flow = self._create_flow('FS_DET', pool)
+        step = flow.steps.get()
+        task = Task(
+            source='FsDetSource', status=Task.Status.ACCEPTED,
+            executor_action_event=TasksManagementConfig.default_executor_event,
+            business_status={}, data={},
+            flow=flow, current_step=step, task_group=pool,
+        )
+        task.save(username=self.admin.username)
+
+        result = TaskService(self.admin).update({'id': task.id, 'detach_flow': True})
+        self.assertTrue(result.get('success'), result)
+        task.refresh_from_db()
+        self.assertIsNone(task.flow_id)
+        self.assertIsNone(task.current_step_id)
+        # the pool it was last with stays, so the task remains actionable
+        self.assertEqual(task.task_group_id, pool.id)
+
+        # detaching a task that never had a flow is refused
+        flat = self._flat_task('FsDetSource2', pool)
+        with self.assertRaises(ValidationError):
+            TaskService(self.admin).update({'id': flat.id, 'detach_flow': True})
+
+    def test_update_without_flow_fields_leaves_the_flow_intact(self):
+        # The safety property behind making detach an explicit flag: an
+        # ordinary update must never unbind a running review.
+        pool = self._group('fs_keep_pool')
+        flow = self._create_flow('FS_KEEP', pool)
+        step = flow.steps.get()
+        task = Task(
+            source='FsKeepSource', status=Task.Status.ACCEPTED,
+            executor_action_event=TasksManagementConfig.default_executor_event,
+            business_status={}, data={},
+            flow=flow, current_step=step, task_group=pool,
+        )
+        task.save(username=self.admin.username)
+
+        result = TaskService(self.admin).update({'id': task.id, 'status': Task.Status.ACCEPTED})
+        self.assertTrue(result.get('success'), result)
+        task.refresh_from_db()
+        self.assertEqual(task.flow_id, flow.id)
+        self.assertEqual(task.current_step_id, step.id)
+
+    # ----------------------------------------------------------- ops command
+
+    def test_re_evaluate_command_resumes_held_task(self):
+        # Step pool emptied after the flow was built -> task holds at step 1
+        # even though its only member approved; refill + command resumes it.
+        group = self._group('fs_cmd_g', policy='ALL', executors=[self.exec_a, self.exec_b])
+        flow = self._create_flow(
+            'FS_CMD', group,
+            steps=[{'task_group_id': str(group.id), 'completion_policy': 'ALL', 'threshold': None}])
+        step = flow.steps.get()
+        task = Task(
+            source='FsCmdSource', status=Task.Status.ACCEPTED,
+            executor_action_event=TasksManagementConfig.default_executor_event,
+            business_status={}, data={}, business_event='fs_cmd_event',
+            flow=flow, current_step=step, task_group=group,
+        )
+        task.save(username=self.admin.username)
+
+        TaskService(self.exec_a).resolve_task({
+            'id': task.id, 'business_status': {str(self.exec_a.id): 'APPROVED'}})
+        task.refresh_from_db()
+        self.assertEqual(task.status, Task.Status.ACCEPTED)
+
+        TaskExecutor.objects.filter(task_group=group, user=self.exec_b).delete()
+        call_command('re_evaluate_task_step', str(task.id), username=self.admin.username)
+        task.refresh_from_db()
+        self.assertEqual(task.status, Task.Status.COMPLETED)
+
+    # ------------------------------------------------- N-policy task groups
+
+    def test_create_n_group_requires_threshold(self):
+        result = TaskGroupService(self.admin).create({
+            'code': 'fs_n_no_threshold', 'completion_policy': 'N',
+            'user_ids': [str(self.exec_a.id)],
+        })
+        self.assertFalse(result.get('success'), result)
+
+        result = TaskGroupService(self.admin).create({
+            'code': 'fs_n_with_threshold', 'completion_policy': 'N', 'threshold': 2,
+            'user_ids': [str(self.exec_a.id)],
+        })
+        self.assertTrue(result.get('success'), result)
+
+    def test_threshold_forbidden_outside_n_policy(self):
+        result = TaskGroupService(self.admin).create({
+            'code': 'fs_any_with_threshold', 'completion_policy': 'ANY', 'threshold': 2,
+            'user_ids': [str(self.exec_a.id)],
+        })
+        self.assertFalse(result.get('success'), result)
+
+    # --------------------------------------- delete guard across lineage
+
+    def test_delete_rejected_when_superseded_predecessor_has_in_flight_task(self):
+        # A task pinned to a superseded version is still "in review" for the
+        # purpose of blocking deletion of the current head - the whole
+        # lineage is retired together when the head is deleted.
+        group = self._group('fs_lin_g')
+        flow = self._create_flow('FS_LINEAGE', group)
+        old_step = flow.steps.get()
+        task = Task(
+            source='FsLineageSource', status=Task.Status.ACCEPTED,
+            executor_action_event=TasksManagementConfig.default_executor_event,
+            business_status={}, data={},
+            flow=flow, current_step=old_step, task_group=group,
+        )
+        task.save(username=self.admin.username)
+
+        replaced = self.service.replace({
+            'id': str(flow.id),
+            'steps': [{'task_group_id': str(group.id), 'completion_policy': None, 'threshold': None}],
+        })
+        self.assertTrue(replaced.get('success'), replaced)
+        new_flow_id = replaced['uuid_new_object']
+
+        # task is still pinned to the superseded v1, not the new head
+        task.refresh_from_db()
+        self.assertEqual(str(task.flow_id), str(flow.id))
+
+        result = self.service.delete({'id': new_flow_id})
+        self.assertFalse(result.get('success'), result)
+

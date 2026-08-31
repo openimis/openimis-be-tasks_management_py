@@ -6,9 +6,12 @@ It is dedicated to be deployed as a module of [openimis-be_py](https://github.co
 * task_management_task, task_management_historicaltask > Task
 * task_management_taskgroup, task_management_historicaltaskgroup > TaskGroup
 * task_management_taskexecutor, task_management_historicaltaskexecutor > TaskExecutor
+* task_management_taskflow, task_management_historicaltaskflow > TaskFlow
+* task_management_taskflowstep, task_management_historicaltaskflowstep > TaskFlowStep
+* task_management_taskdecision, task_management_historicaltaskdecision > TaskDecision
 
 ## GraphQl Queries
-* task, taskGroup, taskExecutor
+* task, taskGroup, taskExecutor, taskFlow, taskDecision, taskAssignmentTargets
 
 ## Services
 - Task
@@ -40,10 +43,69 @@ It is dedicated to be deployed as a module of [openimis-be_py](https://github.co
 * gql_task_create_perms: 191002
 * gql_task_update_perms: 191003
 * gql_task_delete_perms: 191004
+* gql_task_search_all_perms: 191005
+* gql_task_flow_search_perms: 192001
+* gql_task_flow_create_perms: 192002
+* gql_task_flow_update_perms: 192003
+* gql_task_flow_delete_perms: 192004
 * default_executor_event: default
+* flow_ineligible_sources: claim_sampling
+* flow_batch_sources: import_valid_items, import_group_valid_items
 
 ## openIMIS Modules Dependencies
 - core
+
+## Layered task approvals (approval flows)
+A TaskFlow is a reusable, ordered sequence of TaskFlowSteps. Each step points at a
+TaskGroup used as its executor pool, and may override that group's completion
+policy (ALL / ANY / N+threshold) or inherit it. A task following a flow advances
+step by step - `Task.flow` and `Task.current_step` track its position, and
+`Task.task_group` is kept pointing at the active step's pool so existing
+executor-based visibility and filtering keep working unchanged. Every vote is
+recorded in TaskDecision, an insert-only ledger, before the step is evaluated.
+
+A task reaches a flow one of two ways:
+- **Automatically**, when its `source` is bound to a flow's `task_sources`
+  (`TaskFlow.json_ext.task_sources`) - the flow is matched at task creation time,
+  ahead of the legacy task-group source binding.
+- **Manually**, via `updateTask(flowId: ...)` on an existing task - it is parked
+  on the flow's first step, with its task group derived from that step's pool.
+  `updateTask(detachFlow: true)` returns a task to a flat, group-only task.
+  Both are refused once the task carries a TaskDecision, since decisions are
+  recorded against the flow it was on.
+
+TaskFlow is versioned via HistoryBusinessModel: editing a flow's steps replaces
+it (a new head version is created, the old one is superseded), so tasks already
+mid-review keep following the version they started on and only new tasks bind to
+the new head.
+
+**Role-rights (192001-192004) are not provisioned by a migration.** Like the
+rest of this module's rights, `insert_role_right_for_system` is a deliberate
+no-op - core assigns rights from the Roles administration UI at deployment
+time, not from module code. A fresh deployment must grant these four rights to
+the appropriate roles there before any approval-flow screen becomes usable to
+anyone but a superuser.
+
+**Per-record batch sources follow flows too, on a separate path.**
+`flow_batch_sources` (`import_valid_items`, `import_group_valid_items`) lists
+sources that submit a per-record verdict - `{ACCEPT: [...], REJECT: [...]}` -
+instead of one verdict for the whole task. A batch task's step evaluates by
+*reviewers who have voted*, not by counting approvals of a single subject:
+each `TaskDecision` is recorded per record per step, a record rejected at any
+step stays rejected for the rest of the flow, and the step (and the task)
+advances once enough distinct reviewers have submitted a verdict to satisfy
+the step's policy - the same ALL/ANY/N+threshold policies as a whole-task
+step. `flow_rejected_record_ids(task)` gives the consumer module the set of
+record ids rejected anywhere along the flow; the module applies its business
+action once, at task completion, to everything in the upload except those -
+mirroring the flat behaviour where a rejected row is simply left out.
+
+**Not every task source can join a flow.** `flow_ineligible_sources` lists
+sources whose resolution is genuinely incompatible with either flow path -
+claim sampling (`claim_sampling`) does not fit the per-task or per-record
+verdict shape the flow engine expects. A flow match against one of these
+sources is skipped at creation, and a manual `updateTask(flowId: ...)`
+against one of their tasks is rejected.
 
 ## Creating execution action handlers and business event handlers
 When user action specified by the task is being passed to backend, the task service sends ``task_service.resolve_task`` 
