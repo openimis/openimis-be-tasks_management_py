@@ -10,7 +10,6 @@ DEFAULT_CONFIG = {
     "gql_task_create_perms": ["191002"],
     "gql_task_update_perms": ["191003"],
     "gql_task_delete_perms": ["191004"],
-    "gql_task_search_all_perms": ["191005"],
 
     "gql_task_flow_search_perms": ["192001"],
     "gql_task_flow_create_perms": ["192002"],
@@ -48,7 +47,6 @@ class TasksManagementConfig(AppConfig):
     gql_task_create_perms = None
     gql_task_update_perms = None
     gql_task_delete_perms = None
-    gql_task_search_all_perms = None
     gql_task_flow_search_perms = None
     gql_task_flow_create_perms = None
     gql_task_flow_update_perms = None
