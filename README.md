@@ -43,7 +43,6 @@ It is dedicated to be deployed as a module of [openimis-be_py](https://github.co
 * gql_task_create_perms: 191002
 * gql_task_update_perms: 191003
 * gql_task_delete_perms: 191004
-* gql_task_search_all_perms: 191005
 * gql_task_flow_search_perms: 192001
 * gql_task_flow_create_perms: 192002
 * gql_task_flow_update_perms: 192003

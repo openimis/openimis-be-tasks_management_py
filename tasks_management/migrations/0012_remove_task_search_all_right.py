@@ -1,9 +1,10 @@
 from django.db import migrations
 from core.utils import insert_role_right_for_system, remove_role_right_for_system
 
-# 191005 (task "search all") is retired: it was never enforced server-side and
-# duplicated access the IMIS Administrator / Task Triage roles already have via
-# their task-group rights (is_task_triage) and 191001. Mirrors 0010 in reverse.
+# Retire 191005 (task "search all"): never enforced server-side, redundant with
+# is_task_triage + 191001 for the roles that hold it. Mirrors 0010 reversed.
+# Deploy the 191001-gated frontend (openimis-fe-tasks_management_js#70) first;
+# both roles keep 191001 (migration 0005), so task-page access is unaffected.
 tasks_rights = 191005
 imis_administrator_system = 64
 task_triage = 2097152
