@@ -10,10 +10,28 @@ DEFAULT_CONFIG = {
     "gql_task_create_perms": ["191002"],
     "gql_task_update_perms": ["191003"],
     "gql_task_delete_perms": ["191004"],
-    "gql_task_search_all_perms": ["191005"],
+
+    "gql_task_flow_search_perms": ["192001"],
+    "gql_task_flow_create_perms": ["192002"],
+    "gql_task_flow_update_perms": ["192003"],
+    "gql_task_flow_delete_perms": ["192004"],
     # To be used if task should use generic resolver
     "default_executor_event": "default",
     "task_user_approved": "APPROVED",
+    # Sources whose tasks are resolved per-record by consumer modules at
+    # resolve time. Flows must not bind to them: their business logic
+    # executes on the first vote, which would bypass every later step.
+    "flow_ineligible_sources": [
+        "claim_sampling",
+    ],
+    # Sources that submit a per-record verdict ({ACCEPT: [...], REJECT: [...]})
+    # instead of one verdict for the whole task. They follow flows through the
+    # batch path: the batch advances as a unit, each step filters records out,
+    # and the consumer module applies the surviving set once at completion.
+    "flow_batch_sources": [
+        "import_valid_items",
+        "import_group_valid_items",
+    ],
 }
 
 
@@ -29,9 +47,14 @@ class TasksManagementConfig(AppConfig):
     gql_task_create_perms = None
     gql_task_update_perms = None
     gql_task_delete_perms = None
-    gql_task_search_all_perms = None
+    gql_task_flow_search_perms = None
+    gql_task_flow_create_perms = None
+    gql_task_flow_update_perms = None
+    gql_task_flow_delete_perms = None
     default_executor_event = None
     task_user_approved = None
+    flow_ineligible_sources = None
+    flow_batch_sources = None
 
     def ready(self):
         from core.models import ModuleConfiguration
