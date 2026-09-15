@@ -17,7 +17,7 @@ class CreateTaskGroupInput(OpenIMISMutation.Input):
         ANY = TaskGroup.TaskGroupCompletionPolicy.ANY
         N = TaskGroup.TaskGroupCompletionPolicy.N
 
-    code = graphene.String(required=True, max_length=255)
+    code = graphene.String(required=False, max_length=255)
     completion_policy = graphene.Field(TaskGroupCompletionPolicyEnum, required=True)
     # Required for N, forbidden otherwise - mirrors TaskFlowStep's own
     # threshold field and validate_task_group's check on it.
@@ -192,7 +192,7 @@ class TaskFlowStepInput(graphene.InputObjectType):
 
 
 class CreateTaskFlowInput(OpenIMISMutation.Input):
-    code = graphene.String(required=True, max_length=255)
+    code = graphene.String(required=False, max_length=255)
     name = graphene.String(required=False, max_length=255)
     task_sources = graphene.List(graphene.String)
     steps = graphene.List(TaskFlowStepInput, required=True)

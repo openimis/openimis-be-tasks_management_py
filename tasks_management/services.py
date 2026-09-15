@@ -18,6 +18,7 @@ from core.services.utils import check_authentication, output_exception, output_r
 from core.utils import to_json_safe_value
 from tasks_management.apps import TasksManagementConfig
 from tasks_management.models import TaskGroup, TaskExecutor, Task, TaskFlow, TaskFlowStep
+from tasks_management.utils import generate_task_group_code, generate_task_flow_code
 from tasks_management.validation import TaskGroupValidation, TaskExecutorValidation, TaskValidation, \
     TaskFlowValidation, validate_task_flow_assignment
 
@@ -276,6 +277,8 @@ class TaskGroupService(BaseService):
             with transaction.atomic():
                 user_ids = obj_data.pop('user_ids')
                 obj_data = self._adjust_update_payload(obj_data)
+                # code is always server-generated, never accepted from the client
+                obj_data['code'] = generate_task_group_code()
                 self.validation_class.validate_create(self.user, **obj_data)
                 task_sources = obj_data.pop('task_sources')
                 obj_data = {**obj_data, "json_ext": {"task_sources": list(task_sources)}}
@@ -299,10 +302,12 @@ class TaskGroupService(BaseService):
             with transaction.atomic():
                 user_ids = obj_data.pop('user_ids')
                 obj_data = self._adjust_update_payload(obj_data)
-                self.validation_class.validate_update(self.user, **obj_data)
-                task_sources = obj_data.pop('task_sources')
                 task_group_id = obj_data.get('id')
                 task_group = TaskGroup.objects.get(id=task_group_id)
+                # code is server-generated and frozen after creation
+                obj_data['code'] = task_group.code
+                self.validation_class.validate_update(self.user, **obj_data)
+                task_sources = obj_data.pop('task_sources')
                 json_ext = task_group.json_ext if task_group.json_ext else dict()
                 obj_data = {**obj_data, "json_ext": {**json_ext, "task_sources": list(task_sources)}}
                 current_task_executors = task_group.taskexecutor_set.filter(is_deleted=False)
@@ -392,6 +397,8 @@ class TaskFlowService(BaseService):
             with transaction.atomic():
                 steps = obj_data.pop('steps', None) or []
                 task_sources = obj_data.pop('task_sources', None) or []
+                # code is always server-generated, never accepted from the client
+                obj_data['code'] = generate_task_flow_code()
                 self.validation_class.validate_create(
                     self.user, **obj_data, steps=steps, task_sources=task_sources)
                 obj_data = {**obj_data, "json_ext": {"task_sources": list(task_sources)}}
@@ -426,6 +433,8 @@ class TaskFlowService(BaseService):
                         "source binding")
                 if task_sources is None:
                     task_sources = (flow.json_ext or {}).get('task_sources', [])
+                # code is server-generated and frozen after creation
+                obj_data['code'] = flow.code
                 self.validation_class.validate_update(
                     self.user, **obj_data, task_sources=task_sources)
                 json_ext = flow.json_ext if flow.json_ext else dict()
@@ -457,7 +466,9 @@ class TaskFlowService(BaseService):
                 task_sources = obj_data.pop('task_sources', None)
                 if task_sources is None:
                     task_sources = (old_flow.json_ext or {}).get('task_sources', [])
-                code = obj_data.get('code') or old_flow.code
+                # code is server-generated and frozen across replace - a new version
+                # keeps its predecessor's code rather than accepting one from the client
+                code = old_flow.code
                 name = obj_data.get('name', old_flow.name)
                 self.validation_class.validate_replace(
                     self.user, id=str(old_flow.id), code=code, steps=steps,
