@@ -6,6 +6,7 @@ from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
 from core.models import HistoryModel, HistoryBusinessModel, User, UUIDModel, ObjectMutation, MutationLog
+from core.models import ParentScope
 
 
 class TaskGroup(HistoryModel):
@@ -127,6 +128,8 @@ class TaskFlowStep(HistoryBusinessModel):
 
 
 class TaskExecutor(HistoryModel):
+    row_scope = ParentScope("user")
+
     user = models.ForeignKey(User, on_delete=models.DO_NOTHING, null=False)
     task_group = models.ForeignKey(TaskGroup, on_delete=models.DO_NOTHING, null=False)
 
