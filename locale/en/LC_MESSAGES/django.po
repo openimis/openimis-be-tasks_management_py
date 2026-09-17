@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2023-07-12 09:41+0200\n"
+"POT-Creation-Date: 2026-09-17 16:48+0000\n"
 "PO-Revision-Date: 2023-07-12 09:41+0200\n"
 "Last-Translator: JAN DOLKOWSKI <jdolkowski@soldevelo.com>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -17,116 +17,153 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-#: tasks_management/validation.py:74
-msgid "tasks_management.validation.task.updating_completed_task"
-msgstr "Cannot update completed task."
-
-#: tasks_management/validation.py:82
-msgid "tasks_management.validation.group_executor.user_does_not_exist"
-msgstr "User does not exist"
-
-#: tasks_management/validation.py:91
-msgid "tasks_management.validation.task_group.code_exists"
-msgstr "Code exists"
-
-#: tasks_management/validation.py:99
-msgid "tasks_management.validation.field_empty"
-msgstr "Empty field"
-
-#: tasks_management/models.py:12
+#: tasks_management/models.py:14 tasks_management/models.py:83
 msgid "ALL"
 msgstr "ALL"
 
-#: tasks_management/models.py:13
+#: tasks_management/models.py:15 tasks_management/models.py:84
 msgid "ANY"
 msgstr "ANY"
 
-#: tasks_management/models.py:14
+#: tasks_management/models.py:16 tasks_management/models.py:85
 msgid "N"
 msgstr "N"
 
-#: tasks_management/models.py:29
+#: tasks_management/models.py:139
 msgid "Received"
 msgstr "Received"
 
-#: tasks_management/models.py:30
+#: tasks_management/models.py:140
 msgid "Accepted"
 msgstr "Accepted"
 
-#: tasks_management/models.py:31
+#: tasks_management/models.py:141
 msgid "Completed"
 msgstr "Completed"
 
-#: tasks_management/models.py:32
+#: tasks_management/models.py:142 tasks_management/models.py:190
 msgid "Failed"
 msgstr "Failed"
 
-msgid "tasks_management.validation.another_task_pending"
-msgstr "Another task is pending for %(instance)."
+#: tasks_management/models.py:188
+msgid "Approved"
+msgstr ""
 
-msgid "tasks_management.validation.entity_not_found"
-msgstr "Entity not found."
+#: tasks_management/models.py:189
+msgid "Rejected"
+msgstr ""
 
-msgid "tasks_management.validation.validate_unique_task_source"
-msgstr "Task sources already assigned: %(task_groups_by_source)s"
+#: tasks_management/validation.py:83
+msgid "tasks_management.validation.task_group.threshold_required"
+msgstr "Completion policy N needs a threshold of at least 1."
 
-msgid "tasks_management.validation.task_flow_assignment.unknown_task"
-msgstr "Task not found."
-
-msgid "tasks_management.validation.task_flow_assignment.task_closed"
-msgstr "This task is already %(status)s and can no longer be reassigned."
-
-msgid "tasks_management.validation.task_flow_assignment.decisions_exist"
-msgstr "Decisions have already been recorded on this task, so its approval flow can no longer be changed."
-
-msgid "tasks_management.validation.task_flow_assignment.not_on_a_flow"
-msgstr "This task does not follow an approval flow."
-
-msgid "tasks_management.validation.task_flow_assignment.unknown_flow"
-msgstr "Approval flow not found."
-
-msgid "tasks_management.validation.task_flow_assignment.flow_not_current"
-msgstr "Approval flow %(code)s is no longer current - pick the latest version."
-
-msgid "tasks_management.validation.task_flow_assignment.flow_without_steps"
-msgstr "Approval flow %(code)s has no steps, so it cannot take on tasks."
-
-msgid "tasks_management.validation.task_flow_assignment.source_ineligible"
-msgstr "Tasks from %(source)s use a resolution handler that approval flows cannot drive, so they cannot follow one."
-
-msgid "tasks_management.validation.task_flow_assignment.custom_executor_event"
-msgstr "This task is resolved through the %(event)s action, which does not advance approval flows."
-
-
-msgid "tasks_management.validation.task_flow.code_exists"
-msgstr "Approval flow code %(code)s is already in use."
-
-msgid "tasks_management.validation.task_flow.ineligible_sources"
-msgstr "These sources cannot be bound to an approval flow: %(sources)s."
-
-msgid "tasks_management.validation.task_flow.no_steps"
-msgstr "An approval flow needs at least one step."
-
-msgid "tasks_management.validation.task_flow.step_group_missing"
-msgstr "Step %(order)s refers to a task group that no longer exists."
-
-msgid "tasks_management.validation.task_flow.step_policy_invalid"
-msgstr "Step %(order)s has an unrecognized completion policy: %(policy)s."
-
-msgid "tasks_management.validation.task_flow.step_pool_empty"
-msgstr "Step %(order)s's executor pool %(group)s has no members."
-
-msgid "tasks_management.validation.task_flow.step_threshold_exceeds_pool"
-msgstr "Step %(order)s needs %(threshold)s approvals, but its pool %(pool)s has fewer members."
-
-msgid "tasks_management.validation.task_flow.step_threshold_forbidden"
-msgstr "Step %(order)s has a threshold, but its policy is not N."
-
-msgid "tasks_management.validation.task_flow.step_threshold_required"
-msgstr "Step %(order)s uses policy N and needs a threshold of at least 1."
-
+#: tasks_management/validation.py:85
 msgid "tasks_management.validation.task_group.threshold_forbidden"
 msgstr "A threshold is only used with completion policy N."
 
-msgid "tasks_management.validation.task_group.threshold_required"
-msgstr "Completion policy N needs a threshold of at least 1."
+#: tasks_management/validation.py:100
+msgid "tasks_management.validation.task.updating_completed_task"
+msgstr "Cannot update completed task."
+
+#: tasks_management/validation.py:106
+msgid "tasks_management.validation.group_executor.user_does_not_exist"
+msgstr "User does not exist"
+
+#: tasks_management/validation.py:117
+msgid "tasks_management.validation.field_empty"
+msgstr "Empty field"
+
+#: tasks_management/validation.py:128
+msgid "tasks_management.validation.entity_not_found"
+msgstr "Entity not found."
+
+#: tasks_management/validation.py:138
+msgid "tasks_management.validation.another_task_pending"
+msgstr "Another task is pending for %(instance)."
+
+#: tasks_management/validation.py:167
+msgid "tasks_management.validation.validate_unique_task_source"
+msgstr "Task sources already assigned: %(task_groups_by_source)s"
+
+#: tasks_management/validation.py:208
+msgid "tasks_management.validation.task_flow.code_exists"
+msgstr "Approval flow code %(code)s is already in use."
+
+#: tasks_management/validation.py:215
+msgid "tasks_management.validation.task_flow.ineligible_sources"
+msgstr "These sources cannot be bound to an approval flow: %(sources)s."
+
+#: tasks_management/validation.py:229
+msgid "tasks_management.validation.task_flow.no_steps"
+msgstr "An approval flow needs at least one step."
+
+#: tasks_management/validation.py:237
+msgid "tasks_management.validation.task_flow.step_group_missing"
+msgstr "Step %(order)s refers to a task group that no longer exists."
+
+#: tasks_management/validation.py:242
+msgid "tasks_management.validation.task_flow.step_pool_empty"
+msgstr "Step %(order)s's executor pool %(group)s has no members."
+
+#: tasks_management/validation.py:249
+msgid "tasks_management.validation.task_flow.step_policy_invalid"
+msgstr "Step %(order)s has an unrecognized completion policy: %(policy)s."
+
+#: tasks_management/validation.py:256
+msgid "tasks_management.validation.task_flow.step_threshold_required"
+msgstr "Step %(order)s uses policy N and needs a threshold of at least 1."
+
+#: tasks_management/validation.py:259
+msgid "tasks_management.validation.task_flow.step_threshold_forbidden"
+msgstr "Step %(order)s has a threshold, but its policy is not N."
+
+#: tasks_management/validation.py:263
+msgid "tasks_management.validation.task_flow.step_threshold_exceeds_pool"
+msgstr ""
+"Step %(order)s needs %(threshold)s approvals, but its pool %(pool)s has "
+"fewer members."
+
+#: tasks_management/validation.py:279
+msgid "tasks_management.validation.task_flow_assignment.unknown_task"
+msgstr "Task not found."
+
+#: tasks_management/validation.py:284
+msgid "tasks_management.validation.task_flow_assignment.task_closed"
+msgstr "This task is already %(status)s and can no longer be reassigned."
+
+#: tasks_management/validation.py:293
+msgid "tasks_management.validation.task_flow_assignment.decisions_exist"
+msgstr ""
+"Decisions have already been recorded on this task, so its approval flow can "
+"no longer be changed."
+
+#: tasks_management/validation.py:298
+msgid "tasks_management.validation.task_flow_assignment.not_on_a_flow"
+msgstr "This task does not follow an approval flow."
+
+#: tasks_management/validation.py:307
+msgid "tasks_management.validation.task_flow_assignment.source_ineligible"
+msgstr ""
+"Tasks from %(source)s use a resolution handler that approval flows cannot "
+"drive, so they cannot follow one."
+
+#: tasks_management/validation.py:311
+msgid "tasks_management.validation.task_flow_assignment.custom_executor_event"
+msgstr ""
+"This task is resolved through the %(event)s action, which does not advance "
+"approval flows."
+
+#: tasks_management/validation.py:316
+msgid "tasks_management.validation.task_flow_assignment.unknown_flow"
+msgstr "Approval flow not found."
+
+#: tasks_management/validation.py:322
+msgid "tasks_management.validation.task_flow_assignment.flow_not_current"
+msgstr "Approval flow %(code)s is no longer current - pick the latest version."
+
+#: tasks_management/validation.py:326
+msgid "tasks_management.validation.task_flow_assignment.flow_without_steps"
+msgstr "Approval flow %(code)s has no steps, so it cannot take on tasks."
+
+#~ msgid "tasks_management.validation.task_group.code_exists"
+#~ msgstr "Code exists"
