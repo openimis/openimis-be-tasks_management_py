@@ -21,6 +21,13 @@ class TaskGroup(HistoryModel):
     )
     threshold = models.PositiveSmallIntegerField(null=True, blank=True)
 
+    @classmethod
+    def get_rights(cls, action):
+        """Access point to the rights of the `taskGroup` entity."""
+        from tasks_management.apps import configured_perms
+
+        return configured_perms("taskGroup", action)
+
     class Meta:
         constraints = [
             models.CheckConstraint(
@@ -58,6 +65,18 @@ class TaskFlow(HistoryBusinessModel):
     code = models.CharField(max_length=255, null=False, blank=False)
     name = models.CharField(max_length=255, blank=True, default='')
 
+    @classmethod
+    def get_rights(cls, action):
+        """
+        Access point to the rights of the `taskFlow` entity.
+
+        `replace` is not a distinct action: replacing a flow is the versioned form of
+        modifying it, and the mutation checks the `update` right.
+        """
+        from tasks_management.apps import configured_perms
+
+        return configured_perms("taskFlow", action)
+
     class Meta:
         constraints = [
             # Head versions only: a superseded row keeps is_deleted=False,
@@ -79,6 +98,15 @@ class TaskFlowStep(HistoryBusinessModel):
     in another. Versioned via HistoryBusinessModel like TaskFlow;
     Task.current_step pins the exact step version a task is on.
     """
+    # A step is not an object one holds rights on separately: creating it, reordering
+    # it or deleting it means composing the flow, and the mutations confirm it -
+    # createTaskFlow / updateTaskFlow / replaceTaskFlow all check a `taskFlow` right,
+    # never a `taskGroup` one. `scope_parent` therefore denotes `flow` and not
+    # `task_group`: the latter is the *pool* the step references, a group shared
+    # between flows, and does not govern who may compose this particular flow. The
+    # parent is declared and not inferred, precisely because the two FKs look alike.
+    scope_parent = "flow"
+
     class StepCompletionPolicy(models.TextChoices):
         ALL = 'ALL', _('ALL')
         ANY = 'ANY', _('ANY')
@@ -128,7 +156,18 @@ class TaskFlowStep(HistoryBusinessModel):
 
 
 class TaskExecutor(HistoryModel):
+    # `row_scope` (which rows) and `scope_parent` (which rights) answer two different
+    # questions and do not target the same FK, hence the two declarations.
     row_scope = ParentScope("user")
+
+    # Membership of a group has no rights of its own: it is neither created nor
+    # deleted by a mutation of its own - `TaskGroupService.create/update/delete` is
+    # what lays down and removes the rows from the group mutation's `user_ids` - and
+    # the only query that exposes it (`resolve_task_executor`) already checks
+    # `gql_task_group_search_perms`. `scope_parent` therefore denotes `task_group` and
+    # not `user`: `user` says *whose* the row is (that is `row_scope`'s job above), not
+    # who has the right to compose this group.
+    scope_parent = "task_group"
 
     user = models.ForeignKey(User, on_delete=models.DO_NOTHING, null=False)
     task_group = models.ForeignKey(TaskGroup, on_delete=models.DO_NOTHING, null=False)
@@ -159,6 +198,21 @@ class Task(HistoryModel):
         TaskFlowStep, on_delete=models.DO_NOTHING, blank=True, null=True, related_name='tasks_at_step'
     )
 
+    @classmethod
+    def get_rights(cls, action):
+        """
+        Access point to the rights of the `task` entity.
+
+        `create` and `delete` do answer, but no server entry point queries them today
+        (see the note on dormant declarations in `tasks_management.apps`). `resolve` is
+        not declared: voting on a task is governed by membership of the executing
+        group, not by a right - so the method returns None and the caller must fail
+        closed.
+        """
+        from tasks_management.apps import configured_perms
+
+        return configured_perms("task", action)
+
     class Meta:
         constraints = [
             # One-directional on purpose: a finished flow task may clear its
@@ -188,6 +242,13 @@ class TaskDecision(HistoryModel):
         APPROVED = 'APPROVED', _('Approved')
         REJECTED = 'REJECTED', _('Rejected')
         FAILED = 'FAILED', _('Failed')
+
+    # A vote is not an object with rights of its own: it is only written by the
+    # resolution of a task (`signals/on_task_resolve`) and its GraphQL visibility
+    # already copies the task's. `scope_parent` denotes `task` among the three FKs:
+    # `flow_step` is the step *where* the vote was cast and `user` its author, and
+    # neither governs who may read or write this task's record.
+    scope_parent = "task"
 
     task = models.ForeignKey(
         Task, on_delete=models.DO_NOTHING, null=False, related_name='decisions'
