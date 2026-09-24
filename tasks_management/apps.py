@@ -41,7 +41,7 @@ DJANGO_PERMS = {
     },
     "task": {
         "query": ("tasks_management.view_task", 191001),
-        # Dormantes cote serveur, voir la note ci-dessus.
+        # Dormant on the server side, see the note above.
         "create": ("tasks_management.add_task", 191002),
         "update": ("tasks_management.change_task", 191003),
         "delete": ("tasks_management.delete_task", 191004),

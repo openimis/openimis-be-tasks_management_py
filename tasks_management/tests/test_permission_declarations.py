@@ -187,7 +187,8 @@ class TasksManagementPermissionDeclarationTestCase(TestCase):
                 )
 
     def test_withdrawn_search_all_right_is_not_reintroduced(self):
-        """0012 retire 191005 des roles : le redeclarer le rendrait de nouveau exigible."""
+        """0012 takes 191005 away from the roles: redeclaring it would make it
+        required again."""
         declared = {
             right_id
             for actions in DJANGO_PERMS.values()
