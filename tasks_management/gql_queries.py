@@ -10,6 +10,7 @@ from core import ExtendedConnection, prefix_filterset
 from core.gql_queries import UserGQLType
 from tasks_management.apps import TasksManagementConfig
 from tasks_management.models import TaskGroup, TaskExecutor, Task, TaskFlow, TaskFlowStep, TaskDecision
+from core.gql import ScopedQuerysetMixin
 
 DICT_STRING = "{}"
 
@@ -183,7 +184,7 @@ class TaskGroupGQLType(DjangoObjectType):
         return TaskExecutor.objects.filter(task_group_id=task_group_id)
 
 
-class TaskExecutorGQLType(DjangoObjectType):
+class TaskExecutorGQLType(ScopedQuerysetMixin, DjangoObjectType):
     uuid = graphene.String(source='uuid')
 
     class Meta:
