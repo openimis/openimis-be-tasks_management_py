@@ -133,6 +133,12 @@ class Query(graphene.ObjectType):
     )
 
     def resolve_task_group(self, info, **kwargs):
+        # Same right as resolve_task_executor just below: TaskGroupGQLType is this
+        # module's only type without get_queryset nor ScopedQuerysetMixin, so nothing
+        # restricted either the action or the rows.
+        Query._check_permissions(
+            info.context.user, TasksManagementConfig.gql_task_group_search_perms
+        )
         filters = append_validity_filter(**kwargs)
 
         client_mutation_id = kwargs.get("client_mutation_id", None)
