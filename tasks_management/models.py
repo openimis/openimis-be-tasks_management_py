@@ -213,6 +213,34 @@ class Task(HistoryModel):
 
         return configured_perms("task", action)
 
+    @classmethod
+    def get_queryset(cls, queryset, user=None):
+        """
+        The tasks `user` may see: all of them for triage, otherwise those of the
+        groups the user is a live executor of, once they have left RECEIVED.
+
+        Not a location scope, so not a `row_scope`. Also applied to history rows
+        (`TaskHistoryGQLType`), which carry the same fields. Membership goes
+        through a subquery rather than a join, so a user holding several executor
+        rows for one group does not duplicate tasks.
+        """
+        from tasks_management.gql_queries import is_task_triage
+
+        user = cls.scoping_user(user)
+        if queryset is None:
+            queryset = cls.objects.all()
+        queryset = queryset.filter(is_deleted=False)
+        if user is None or getattr(user, "is_anonymous", True):
+            return queryset.none()
+        if user.is_superuser or is_task_triage(user):
+            return queryset
+        executor_groups = TaskGroup.objects.filter(
+            taskexecutor__user=user, taskexecutor__is_deleted=False
+        )
+        return queryset.filter(task_group__in=executor_groups).exclude(
+            status=cls.Status.RECEIVED
+        )
+
     class Meta:
         constraints = [
             # One-directional on purpose: a finished flow task may clear its

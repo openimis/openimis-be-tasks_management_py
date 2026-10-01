@@ -14,7 +14,7 @@ from tasks_management.gql_mutations import CreateTaskGroupMutation, UpdateTaskGr
 from tasks_management.gql_queries import TaskGroupGQLType, TaskExecutorGQLType, TaskGQLType, TaskHistoryGQLType, \
     TaskFlowGQLType, TaskDecisionGQLType, TaskAssignmentTargetGQLType
 from tasks_management.models import TaskGroup, TaskExecutor, Task, TaskFlow, TaskDecision
-from tasks_management.apps import TasksManagementConfig
+from tasks_management.apps import TasksManagementConfig, require
 
 
 class Query(graphene.ObjectType):
@@ -73,6 +73,8 @@ class Query(graphene.ObjectType):
     )
 
     def resolve_task(self, info, **kwargs):
+        user = info.context.user
+        Query._require(user, "task", "query")
         filters = append_validity_filter(**kwargs)
 
         client_mutation_id = kwargs.get("client_mutation_id")
@@ -88,8 +90,9 @@ class Query(graphene.ObjectType):
         if entityIds:
             filters.append(Q(entity_id__in=entityIds))
 
-        # not checking perms because get_queryset filters tasks assigned to user
-        query = Task.objects.filter(*filters)
+        # Scoped here, not only by the type hook: the entityString filter below
+        # walks the rows in Python, and must only see the ones the user may.
+        query = Task.get_queryset(Task.objects.filter(*filters), user)
 
         entity_string = kwargs.get("entityString__Icontains")
         if entity_string:
@@ -99,6 +102,8 @@ class Query(graphene.ObjectType):
         return gql_optimizer.query(query, info)
 
     def resolve_task_history(self, info, **kwargs):
+        user = info.context.user
+        Query._require(user, "task", "query")
         filters = append_validity_filter(**kwargs)
 
         client_mutation_id = kwargs.get("client_mutation_id")
@@ -114,8 +119,9 @@ class Query(graphene.ObjectType):
         if entityIds:
             filters.append(Q(entity_id__in=entityIds))
 
-        # not checking perms because get_queryset filters tasks assigned to user
-        query = Task.history.filter(*filters)
+        # Scoped here, not only by the type hook: the entityString filter below
+        # walks the rows in Python, and must only see the ones the user may.
+        query = Task.get_queryset(Task.history.filter(*filters), user)
 
         entity_string = kwargs.get("entityString__Icontains")
         if entity_string:
@@ -247,6 +253,11 @@ class Query(graphene.ObjectType):
     @staticmethod
     def _check_permissions(user, perms):
         if type(user) is AnonymousUser or not user.id or not user.has_perms(perms):
+            raise PermissionError("Unauthorized")
+
+    @staticmethod
+    def _require(user, entity, action):
+        if type(user) is AnonymousUser or not user.id or not require(user, entity, action):
             raise PermissionError("Unauthorized")
 
 

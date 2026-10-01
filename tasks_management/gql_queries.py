@@ -22,7 +22,7 @@ def is_task_triage(user):
                           + TasksManagementConfig.gql_task_group_delete_perms)
 
 
-class TaskGQLType(DjangoObjectType):
+class TaskGQLType(ScopedQuerysetMixin, DjangoObjectType):
     uuid = graphene.String(source='uuid')
     business_data = graphene.JSONString()
     entity_string = graphene.String()
@@ -85,16 +85,6 @@ class TaskGQLType(DjangoObjectType):
     def resolve_entity_string(self, info):
         return self.entity.__str__()
 
-    @classmethod
-    def get_queryset(cls, queryset, info):
-        user = info.context.user
-        if user.is_imis_admin or is_task_triage(user):
-            return queryset.filter(is_deleted=False)
-        return queryset.filter(
-            Q(task_group__taskexecutor__user=user) & ~Q(status=Task.Status.RECEIVED),
-            is_deleted=False
-        )
-
 
 class TaskHistoryGQLType(DjangoObjectType):
     uuid = graphene.String(source='uuid')
@@ -151,13 +141,8 @@ class TaskHistoryGQLType(DjangoObjectType):
 
     @classmethod
     def get_queryset(cls, queryset, info):
-        user = info.context.user
-        if user.is_imis_admin or is_task_triage(user):
-            return queryset.filter(is_deleted=False)
-        return queryset.filter(
-            Q(task_group__taskexecutor__user=user) & ~Q(status=Task.Status.RECEIVED),
-            is_deleted=False
-        )
+        # The historical model does not inherit Task's classmethods: same rule as tasks.
+        return Task.get_queryset(queryset, info)
 
 
 class TaskGroupGQLType(DjangoObjectType):
