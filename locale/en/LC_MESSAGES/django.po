@@ -79,7 +79,7 @@ msgstr "Entity not found."
 
 #: tasks_management/validation.py:138
 msgid "tasks_management.validation.another_task_pending"
-msgstr "Another task is pending for %(instance)."
+msgstr "Another task is pending for %(instance)s."
 
 #: tasks_management/validation.py:167
 msgid "tasks_management.validation.validate_unique_task_source"
