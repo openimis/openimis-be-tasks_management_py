@@ -139,6 +139,10 @@ class TaskHistoryGQLType(DjangoObjectType):
 
         return serialized_data
 
+    def resolve_entity_string(self, info):
+        # Historical rows don't carry the GenericForeignKey; rebuild the Task to resolve it.
+        return self.instance.entity.__str__() if self.entity_id else None
+
     @classmethod
     def get_queryset(cls, queryset, info):
         # The historical model does not inherit Task's classmethods: same rule as tasks.
