@@ -212,21 +212,42 @@ class TaskService(BaseService):
         try:
             self.validation_class.validate_update(self.user, **obj_data)
             obj = self.OBJECT_TYPE.objects.get(id=obj_data['id'])
+            # Imported here: on_task_resolve imports TaskService at module load.
+            from tasks_management.signals.on_task_resolve import (
+                cast_resolver_draft, explicit_resolution, store_resolver_draft, user_has_finished,
+            )
+            if user_has_finished(obj, self.user):
+                raise ValidationError(
+                    "tasks_management: user '%s' has finished task '%s' and can no "
+                    "longer update it" % (self.user.id, obj.id)
+                )
             incoming_status = obj_data.get('business_status')
             additional_data = obj_data.get('additional_data')
-            self._update_task_business_status(obj, incoming_status, additional_data)
-            self._insert_additional_data_to_json_ext(obj, additional_data)
-            # incoming_status is THIS request's verdict, carried separately
-            # from the task's merged business_status. __deep_merge below
-            # concatenates lists, so for a per-record vote the merged blob
-            # accumulates every step's ids - a reviewer sitting in two steps'
-            # pools would have their earlier verdict replayed against the
-            # later step, and an id present in both lists resolves to the
-            # first one seen. Handlers must read the verdict from here.
+            outcome = explicit_resolution(obj_data.get('status'), None)
+            if outcome == 'partial':
+                # Details can take several passes. Keep them as a draft so a
+                # later DONE can cast them. business_status stays untouched,
+                # which is what import handlers treat as the vote.
+                store_resolver_draft(obj, self.user, incoming_status, additional_data)
+                obj.save(username=self.user.login_name)
+            else:
+                if outcome == 'user_done':
+                    incoming_status, additional_data = cast_resolver_draft(
+                        obj, self.user, incoming_status, additional_data,
+                    )
+                self._update_task_business_status(obj, incoming_status, additional_data)
+                self._insert_additional_data_to_json_ext(obj, additional_data)
+            # incoming_status is the verdict for this call. On DONE it includes
+            # the draft saved while the task was under work. It is carried
+            # separately from the task's merged business_status: that blob
+            # concatenates lists across steps, so a reviewer in two pools
+            # would otherwise have their earlier ids replayed. Handlers must
+            # read the verdict from here.
             return output_result_success({
                 'task': model_representation(obj),
                 'user': {'id': f"{self.user.id}"},
                 'incoming_status': incoming_status,
+                'status': obj_data.get('status'),
             })
         except Exception as exc:
             return output_exception(model_name=self.OBJECT_TYPE.__name__, method="resolve", exception=exc)
@@ -351,7 +372,7 @@ class TaskGroupService(BaseService):
             in_flight_ref = Task.objects.filter(
                 flow__steps__task_group_id=id, flow__steps__is_deleted=False,
                 is_deleted=False,
-                status__in=[Task.Status.RECEIVED, Task.Status.ACCEPTED],
+                status__in=[Task.Status.RECEIVED, *Task.OPEN_FOR_RESOLUTION],
             ).exists()
             if head_step_ref or in_flight_ref:
                 flow_code = head_step_ref.flow.code if head_step_ref else 'a superseded version with in-flight tasks'
@@ -508,7 +529,7 @@ class TaskFlowService(BaseService):
                 lineage = self._lineage(flow)
                 in_flight = Task.objects.filter(
                     flow__in=lineage, is_deleted=False,
-                    status__in=[Task.Status.RECEIVED, Task.Status.ACCEPTED],
+                    status__in=[Task.Status.RECEIVED, *Task.OPEN_FOR_RESOLUTION],
                 ).count()
                 if in_flight:
                     raise ValidationError(

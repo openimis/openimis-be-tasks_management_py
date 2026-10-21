@@ -6,6 +6,7 @@ from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
 from core.models import HistoryModel, HistoryBusinessModel, User, UUIDModel, ObjectMutation, MutationLog
+from core.models import ParentScope
 
 
 class TaskGroup(HistoryModel):
@@ -19,6 +20,13 @@ class TaskGroup(HistoryModel):
         max_length=50, choices=TaskGroupCompletionPolicy.choices, null=False, blank=False
     )
     threshold = models.PositiveSmallIntegerField(null=True, blank=True)
+
+    @classmethod
+    def get_rights(cls, action):
+        """Access point to the rights of the `taskGroup` entity."""
+        from tasks_management.apps import configured_perms
+
+        return configured_perms("taskGroup", action)
 
     class Meta:
         constraints = [
@@ -57,6 +65,18 @@ class TaskFlow(HistoryBusinessModel):
     code = models.CharField(max_length=255, null=False, blank=False)
     name = models.CharField(max_length=255, blank=True, default='')
 
+    @classmethod
+    def get_rights(cls, action):
+        """
+        Access point to the rights of the `taskFlow` entity.
+
+        `replace` is not a distinct action: replacing a flow is the versioned form of
+        modifying it, and the mutation checks the `update` right.
+        """
+        from tasks_management.apps import configured_perms
+
+        return configured_perms("taskFlow", action)
+
     class Meta:
         constraints = [
             # Head versions only: a superseded row keeps is_deleted=False,
@@ -78,6 +98,15 @@ class TaskFlowStep(HistoryBusinessModel):
     in another. Versioned via HistoryBusinessModel like TaskFlow;
     Task.current_step pins the exact step version a task is on.
     """
+    # A step is not an object one holds rights on separately: creating it, reordering
+    # it or deleting it means composing the flow, and the mutations confirm it -
+    # createTaskFlow / updateTaskFlow / replaceTaskFlow all check a `taskFlow` right,
+    # never a `taskGroup` one. `scope_parent` therefore denotes `flow` and not
+    # `task_group`: the latter is the *pool* the step references, a group shared
+    # between flows, and does not govern who may compose this particular flow. The
+    # parent is declared and not inferred, precisely because the two FKs look alike.
+    scope_parent = "flow"
+
     class StepCompletionPolicy(models.TextChoices):
         ALL = 'ALL', _('ALL')
         ANY = 'ANY', _('ANY')
@@ -127,6 +156,19 @@ class TaskFlowStep(HistoryBusinessModel):
 
 
 class TaskExecutor(HistoryModel):
+    # `row_scope` (which rows) and `scope_parent` (which rights) answer two different
+    # questions and do not target the same FK, hence the two declarations.
+    row_scope = ParentScope("user")
+
+    # Membership of a group has no rights of its own: it is neither created nor
+    # deleted by a mutation of its own - `TaskGroupService.create/update/delete` is
+    # what lays down and removes the rows from the group mutation's `user_ids` - and
+    # the only query that exposes it (`resolve_task_executor`) already checks
+    # `gql_task_group_search_perms`. `scope_parent` therefore denotes `task_group` and
+    # not `user`: `user` says *whose* the row is (that is `row_scope`'s job above), not
+    # who has the right to compose this group.
+    scope_parent = "task_group"
+
     user = models.ForeignKey(User, on_delete=models.DO_NOTHING, null=False)
     task_group = models.ForeignKey(TaskGroup, on_delete=models.DO_NOTHING, null=False)
 
@@ -135,8 +177,29 @@ class Task(HistoryModel):
     class Status(models.TextChoices):
         RECEIVED = 'RECEIVED', _('Received')
         ACCEPTED = 'ACCEPTED', _('Accepted')
+        # Open, like ACCEPTED. The task is under work. Set only when the
+        # caller sends resolve status PARTIAL, which does not cast a vote.
+        # Callers that omit status never land here.
+        PARTIAL = 'PARTIAL', _('Partial')
         COMPLETED = 'COMPLETED', _('Completed')
         FAILED = 'FAILED', _('Failed')
+
+    class ResolveProgress:
+        """
+        Flag sent on resolveTask. Not a task status.
+
+        PARTIAL sets Task.status to PARTIAL and stores this user's details
+        as a draft. That draft is not a vote.
+        DONE casts the vote, including the saved draft. They will not update
+        the task again.
+        The task stays ACCEPTED until the group policy or the flow sets
+        Status.COMPLETED.
+        """
+        PARTIAL = 'PARTIAL'
+        DONE = 'DONE'
+
+    # Statuses on which resolveTask is still accepted.
+    OPEN_FOR_RESOLUTION = (Status.ACCEPTED, Status.PARTIAL)
 
     source = models.CharField(max_length=255,  blank=True, null=True)
     entity_type = models.ForeignKey(ContentType, models.DO_NOTHING, blank=True, null=True, unique=False)
@@ -155,6 +218,49 @@ class Task(HistoryModel):
     current_step = models.ForeignKey(
         TaskFlowStep, on_delete=models.DO_NOTHING, blank=True, null=True, related_name='tasks_at_step'
     )
+
+    @classmethod
+    def get_rights(cls, action):
+        """
+        Access point to the rights of the `task` entity.
+
+        `create` and `delete` do answer, but no server entry point queries them today
+        (see the note on dormant declarations in `tasks_management.apps`). `resolve` is
+        not declared: voting on a task is governed by membership of the executing
+        group, not by a right - so the method returns None and the caller must fail
+        closed.
+        """
+        from tasks_management.apps import configured_perms
+
+        return configured_perms("task", action)
+
+    @classmethod
+    def get_queryset(cls, queryset, user=None):
+        """
+        The tasks `user` may see: all of them for triage, otherwise those of the
+        groups the user is a live executor of, once they have left RECEIVED.
+
+        Not a location scope, so not a `row_scope`. Also applied to history rows
+        (`TaskHistoryGQLType`), which carry the same fields. Membership goes
+        through a subquery rather than a join, so a user holding several executor
+        rows for one group does not duplicate tasks.
+        """
+        from tasks_management.gql_queries import is_task_triage
+
+        user = cls.scoping_user(user)
+        if queryset is None:
+            queryset = cls.objects.all()
+        queryset = queryset.filter(is_deleted=False)
+        if user is None or getattr(user, "is_anonymous", True):
+            return queryset.none()
+        if user.is_superuser or is_task_triage(user):
+            return queryset
+        executor_groups = TaskGroup.objects.filter(
+            taskexecutor__user=user, taskexecutor__is_deleted=False
+        )
+        return queryset.filter(task_group__in=executor_groups).exclude(
+            status=cls.Status.RECEIVED
+        )
 
     class Meta:
         constraints = [
@@ -185,6 +291,13 @@ class TaskDecision(HistoryModel):
         APPROVED = 'APPROVED', _('Approved')
         REJECTED = 'REJECTED', _('Rejected')
         FAILED = 'FAILED', _('Failed')
+
+    # A vote is not an object with rights of its own: it is only written by the
+    # resolution of a task (`signals/on_task_resolve`) and its GraphQL visibility
+    # already copies the task's. `scope_parent` denotes `task` among the three FKs:
+    # `flow_step` is the step *where* the vote was cast and `user` its author, and
+    # neither governs who may read or write this task's record.
+    scope_parent = "task"
 
     task = models.ForeignKey(
         Task, on_delete=models.DO_NOTHING, null=False, related_name='decisions'

@@ -10,6 +10,7 @@ from core import ExtendedConnection, prefix_filterset
 from core.gql_queries import UserGQLType
 from tasks_management.apps import TasksManagementConfig
 from tasks_management.models import TaskGroup, TaskExecutor, Task, TaskFlow, TaskFlowStep, TaskDecision
+from core.gql import ScopedQuerysetMixin
 
 DICT_STRING = "{}"
 
@@ -21,7 +22,7 @@ def is_task_triage(user):
                           + TasksManagementConfig.gql_task_group_delete_perms)
 
 
-class TaskGQLType(DjangoObjectType):
+class TaskGQLType(ScopedQuerysetMixin, DjangoObjectType):
     uuid = graphene.String(source='uuid')
     business_data = graphene.JSONString()
     entity_string = graphene.String()
@@ -84,16 +85,6 @@ class TaskGQLType(DjangoObjectType):
     def resolve_entity_string(self, info):
         return self.entity.__str__()
 
-    @classmethod
-    def get_queryset(cls, queryset, info):
-        user = info.context.user
-        if user.is_imis_admin or is_task_triage(user):
-            return queryset.filter(is_deleted=False)
-        return queryset.filter(
-            Q(task_group__taskexecutor__user=user) & ~Q(status=Task.Status.RECEIVED),
-            is_deleted=False
-        )
-
 
 class TaskHistoryGQLType(DjangoObjectType):
     uuid = graphene.String(source='uuid')
@@ -148,15 +139,14 @@ class TaskHistoryGQLType(DjangoObjectType):
 
         return serialized_data
 
+    def resolve_entity_string(self, info):
+        # Historical rows don't carry the GenericForeignKey; rebuild the Task to resolve it.
+        return self.instance.entity.__str__() if self.entity_id else None
+
     @classmethod
     def get_queryset(cls, queryset, info):
-        user = info.context.user
-        if user.is_imis_admin or is_task_triage(user):
-            return queryset.filter(is_deleted=False)
-        return queryset.filter(
-            Q(task_group__taskexecutor__user=user) & ~Q(status=Task.Status.RECEIVED),
-            is_deleted=False
-        )
+        # The historical model does not inherit Task's classmethods: same rule as tasks.
+        return Task.get_queryset(queryset, info)
 
 
 class TaskGroupGQLType(DjangoObjectType):
@@ -183,7 +173,7 @@ class TaskGroupGQLType(DjangoObjectType):
         return TaskExecutor.objects.filter(task_group_id=task_group_id)
 
 
-class TaskExecutorGQLType(DjangoObjectType):
+class TaskExecutorGQLType(ScopedQuerysetMixin, DjangoObjectType):
     uuid = graphene.String(source='uuid')
 
     class Meta:
@@ -262,7 +252,7 @@ class TaskFlowGQLType(DjangoObjectType):
     def resolve_in_flight_count(self, info):
         return Task.objects.filter(
             flow_id=self.id, is_deleted=False,
-            status__in=[Task.Status.RECEIVED, Task.Status.ACCEPTED],
+            status__in=[Task.Status.RECEIVED, *Task.OPEN_FOR_RESOLUTION],
         ).count()
 
 
