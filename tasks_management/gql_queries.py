@@ -252,7 +252,7 @@ class TaskFlowGQLType(DjangoObjectType):
     def resolve_in_flight_count(self, info):
         return Task.objects.filter(
             flow_id=self.id, is_deleted=False,
-            status__in=[Task.Status.RECEIVED, Task.Status.ACCEPTED],
+            status__in=[Task.Status.RECEIVED, *Task.OPEN_FOR_RESOLUTION],
         ).count()
 
 

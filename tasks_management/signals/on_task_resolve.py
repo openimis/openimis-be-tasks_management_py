@@ -1,3 +1,4 @@
+import copy
 import datetime
 import logging
 
@@ -15,6 +16,171 @@ logger = logging.getLogger(__name__)
 # Whole-task verdicts accepted on the flow path. REJECTED is reserved for
 # per-record verdicts (flat batch tasks); rewind semantics arrive with v1.1.
 _FLOW_VERDICTS = (TaskDecision.Decision.APPROVED, TaskDecision.Decision.FAILED)
+
+
+def _status_name(status):
+    if status is None or status is False:
+        return None
+    value = getattr(status, 'value', status)
+    name = str(value)
+    if name in (Task.ResolveProgress.PARTIAL, Task.ResolveProgress.DONE):
+        return name
+    return None
+
+
+def explicit_resolution(status, _verdict):
+    """
+    What this resolve means for the calling user. It does not close the task.
+
+    Callers that have not migrated omit status. A per-record ACCEPT/REJECT list
+    and a whole-task APPROVED/FAILED string then stay on the legacy path
+    (ALL/ANY/N or the flow engine), and that user may resolve again.
+
+    DONE casts this user's vote, including any details saved while the task
+    was under work, and they will not update the task again. PARTIAL stores
+    those details as a draft and does not cast a vote. The task status
+    COMPLETED is not a resolve flag and is ignored here. The verdict argument
+    stays so the signature is stable, but it does not decide which applies.
+    """
+    chosen = _status_name(status)
+    if chosen == Task.ResolveProgress.DONE:
+        return 'user_done'
+    if chosen == Task.ResolveProgress.PARTIAL:
+        return 'partial'
+    return None
+
+
+def user_has_finished(task, user):
+    """True once this user has resolved the task with status DONE."""
+    progress = (task.json_ext or {}).get('resolver_progress') or {}
+    if not isinstance(progress, dict):
+        return False
+    user_id = str(getattr(user, 'id', user))
+    return progress.get(user_id) == Task.ResolveProgress.DONE
+
+
+def _string_keys(mapping):
+    if not isinstance(mapping, dict):
+        return {}
+    return {str(key): value for key, value in mapping.items()}
+
+
+def _dedupe(items):
+    seen = set()
+    unique = []
+    for item in items:
+        key = str(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
+
+
+def _deep_merge(left, right):
+    """Same combination as TaskService, but repeated record ids are kept once."""
+    result = copy.deepcopy(left or {})
+    for key, value in (right or {}).items():
+        current = result.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            result[key] = _deep_merge(current, value)
+        elif isinstance(current, list) and isinstance(value, list):
+            result[key] = _dedupe(list(current) + list(value))
+        else:
+            result[key] = copy.deepcopy(value)
+    return result
+
+
+def _merge_verdict(saved, incoming):
+    """Fold a saved draft into the verdict that is about to be cast."""
+    if incoming is None:
+        return saved
+    if saved is None:
+        return incoming
+    if isinstance(saved, dict) and isinstance(incoming, dict):
+        return _deep_merge(saved, incoming)
+    if isinstance(saved, list) and isinstance(incoming, list):
+        return _dedupe(list(saved) + list(incoming))
+    # A whole-task string (APPROVED/FAILED) replaces the in-progress details.
+    return incoming
+
+
+def store_resolver_draft(task, user, incoming_status, additional_data):
+    """
+    Keep this user's in-progress details.
+
+    The draft lives beside business_status. Import handlers and the group
+    policy read business_status, so a save while the task is under work does
+    not cast a vote.
+    """
+    ext = dict(task.json_ext or {})
+    draft = dict(ext.get('resolver_draft') or {})
+    draft['business_status'] = _deep_merge(
+        draft.get('business_status') or {},
+        _string_keys(incoming_status),
+    )
+    if additional_data is not None:
+        extra = dict(draft.get('additional_data') or {})
+        extra[str(user.id)] = additional_data
+        draft['additional_data'] = extra
+    ext['resolver_draft'] = draft
+    task.json_ext = ext
+    task.status = Task.Status.PARTIAL
+
+
+def cast_resolver_draft(task, user, incoming_status, additional_data):
+    """
+    Turn this user's saved details into the vote on this call.
+
+    Other users' drafts stay where they are. Returns the business status and
+    additional data the caller should store as the cast vote.
+    """
+    user_id = str(user.id)
+    ext = dict(task.json_ext or {})
+    draft = dict(ext.get('resolver_draft') or {})
+    saved_status = _string_keys(draft.get('business_status') or {})
+    incoming_status = _string_keys(incoming_status)
+    combined = _merge_verdict(saved_status.get(user_id), incoming_status.get(user_id))
+    if combined is not None:
+        incoming_status[user_id] = combined
+    saved_status.pop(user_id, None)
+    extra = dict(draft.get('additional_data') or {})
+    if additional_data is None and user_id in extra:
+        additional_data = extra[user_id]
+    extra.pop(user_id, None)
+    if saved_status or extra:
+        draft['business_status'] = saved_status
+        draft['additional_data'] = extra
+        ext['resolver_draft'] = draft
+    else:
+        ext.pop('resolver_draft', None)
+    task.json_ext = ext
+    return incoming_status, additional_data
+
+
+def _remember_progress(task, user, progress):
+    ext = dict(task.json_ext or {})
+    current = ext.get('resolver_progress') or {}
+    if not isinstance(current, dict):
+        current = {}
+    else:
+        current = dict(current)
+    current[str(user.id)] = progress
+    ext['resolver_progress'] = current
+    task.json_ext = ext
+
+
+def _mark_user_done(task, user):
+    """
+    Record that this user has cast their vote and will not update again.
+
+    A task that was under work returns to ACCEPTED, the open state a cast
+    vote leaves. The group policy may still close it afterwards.
+    """
+    _remember_progress(task, user, Task.ResolveProgress.DONE)
+    if task.status == Task.Status.PARTIAL:
+        task.status = Task.Status.ACCEPTED
+    task.save(username=user.login_name)
 
 
 def resolve_task_all(_task, _user):
@@ -472,7 +638,7 @@ def re_evaluate_flow_task(_task_id, _user):
         _task = Task.objects.select_for_update(of=('self',)).select_related(
             'current_step__task_group', 'current_step', 'flow',
         ).get(id=_task_id)
-        if _task.status != Task.Status.ACCEPTED or not _task.flow_id or not _task.current_step_id:
+        if _task.status not in Task.OPEN_FOR_RESOLUTION or not _task.flow_id or not _task.current_step_id:
             logger.warning(
                 "tasks_management.flow: task %s is not an in-review flow task; "
                 "nothing to re-evaluate", _task_id,
@@ -504,9 +670,9 @@ def resolve_flow_task(_task_id, _user, _verdict):
             'current_step__task_group', 'current_step', 'flow',
         ).get(id=_task_id)
 
-        if _task.status != Task.Status.ACCEPTED:
+        if _task.status not in Task.OPEN_FOR_RESOLUTION:
             logger.warning(
-                "tasks_management.flow: task %s no longer ACCEPTED (%s); vote ignored",
+                "tasks_management.flow: task %s is %s and no longer open for a vote; vote ignored",
                 _task.id, _task.status,
             )
             return
@@ -556,6 +722,12 @@ def resolve_flow_task(_task_id, _user, _verdict):
         TaskService(_user).complete_task({"id": _task.id})
 
 
+def _mark_partial(task, user):
+    """The task is under work. Nothing in this call is a vote."""
+    task.status = Task.Status.PARTIAL
+    task.save(username=user.login_name)
+
+
 def on_task_resolve(**kwargs):
     """
     Generic event for checking the completion_policy of a task. If the task is
@@ -566,7 +738,7 @@ def on_task_resolve(**kwargs):
     try:
         result = kwargs.get('result', None)
         if not (result and result['success']
-                and result['data']['task']['status'] == Task.Status.ACCEPTED):
+                and result['data']['task']['status'] in Task.OPEN_FOR_RESOLUTION):
             return
         payload_task = result['data']['task']
         if payload_task['executor_action_event'] != TasksManagementConfig.default_executor_event:
@@ -596,6 +768,29 @@ def on_task_resolve(**kwargs):
     except Exception as e:
         logger.error("Error while executing on_task_resolve", exc_info=e)
         return [str(e)]
+
+    # Absent status (the legacy contract, including claim sampling and the
+    # upload copies that have not moved) falls through to the flow or the
+    # group policy unchanged. DONE does too, after this user is marked
+    # finished: it is not an override of ALL/ANY/N or the flow.
+    outcome = explicit_resolution(data.get('status'), verdict)
+    if outcome == 'user_done':
+        try:
+            _mark_user_done(task, user)
+        except ValidationError:
+            raise
+        except Exception as e:
+            logger.error("Error while finishing user %s on task %s", user.id, task.id, exc_info=e)
+            return [str(e)]
+    elif outcome == 'partial':
+        try:
+            _mark_partial(task, user)
+        except ValidationError:
+            raise
+        except Exception as e:
+            logger.error("Error while marking task %s partial", task.id, exc_info=e)
+            return [str(e)]
+        return
 
     if task.flow_id:
         # ValidationErrors must reach journalize/MutationLog - no swallowing.

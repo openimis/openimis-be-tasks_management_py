@@ -51,9 +51,22 @@ class UpdateTaskGroupInput(CreateTaskGroupInput):
 
 
 class ResolveTaskGroupInput(OpenIMISMutation.Input):
+    class ResolveStatusEnum(graphene.Enum):
+        PARTIAL = Task.ResolveProgress.PARTIAL
+        DONE = Task.ResolveProgress.DONE
+
     id = graphene.UUID(required=True)
     business_status = graphene.JSONString(required=True)
     additional_data = graphene.JSONString(required=False)
+    # Optional. Callers that omit it keep the legacy contract: businessStatus
+    # alone, and ALL/ANY/N or the flow decides when the task closes.
+    # PARTIAL: the task is under work. businessStatus is saved as a draft so
+    # the details can be continued later. It is not a vote, and the task
+    # stays open.
+    # DONE: casts this user's vote, including any draft saved while the task
+    # was under work, and they will not update the task again. The task
+    # becomes COMPLETED only when the group policy or the flow says so.
+    status = graphene.Field(ResolveStatusEnum, required=False)
 
 
 class CreateTaskGroupMutation(BaseHistoryModelCreateMutationMixin, BaseMutation):

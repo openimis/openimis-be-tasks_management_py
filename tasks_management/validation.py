@@ -130,7 +130,7 @@ def validate_existing_task(data):
         filtered_tasks = Task.objects.filter(
             Q(entity_type=content_type) &
             Q(entity_id=str(entity_id)) &
-            (Q(status=Task.Status.ACCEPTED) | Q(status=Task.Status.RECEIVED))
+            Q(status__in=[Task.Status.RECEIVED, *Task.OPEN_FOR_RESOLUTION])
         )
 
         if filtered_tasks.exists():

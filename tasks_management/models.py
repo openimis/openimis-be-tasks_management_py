@@ -177,8 +177,29 @@ class Task(HistoryModel):
     class Status(models.TextChoices):
         RECEIVED = 'RECEIVED', _('Received')
         ACCEPTED = 'ACCEPTED', _('Accepted')
+        # Open, like ACCEPTED. The task is under work. Set only when the
+        # caller sends resolve status PARTIAL, which does not cast a vote.
+        # Callers that omit status never land here.
+        PARTIAL = 'PARTIAL', _('Partial')
         COMPLETED = 'COMPLETED', _('Completed')
         FAILED = 'FAILED', _('Failed')
+
+    class ResolveProgress:
+        """
+        Flag sent on resolveTask. Not a task status.
+
+        PARTIAL sets Task.status to PARTIAL and stores this user's details
+        as a draft. That draft is not a vote.
+        DONE casts the vote, including the saved draft. They will not update
+        the task again.
+        The task stays ACCEPTED until the group policy or the flow sets
+        Status.COMPLETED.
+        """
+        PARTIAL = 'PARTIAL'
+        DONE = 'DONE'
+
+    # Statuses on which resolveTask is still accepted.
+    OPEN_FOR_RESOLUTION = (Status.ACCEPTED, Status.PARTIAL)
 
     source = models.CharField(max_length=255,  blank=True, null=True)
     entity_type = models.ForeignKey(ContentType, models.DO_NOTHING, blank=True, null=True, unique=False)
