@@ -137,7 +137,7 @@ class DeleteTaskGroupMutation(BaseHistoryModelDeleteMutationMixin, BaseMutation)
                     # The service can now refuse a delete (a group used as a
                     # flow step pool); discarding the result would report
                     # GraphQL success while nothing was deleted.
-                    response = service.delete({'id': id, 'user': user})
+                    response = service.delete({'id': id})
                     if response and not response.get('success'):
                         raise ValidationError(str(response))
 
