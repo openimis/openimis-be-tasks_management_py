@@ -6,9 +6,11 @@ import graphene_django_optimizer as gql_optimizer
 from django.apps import apps
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.db.models import CharField, Count, Q
 from django.db.models.functions import Cast
 
+from core.rights_scope import has_model_right
 from core.schema import OrderedDjangoFilterConnectionField
 from core.services import wait_for_mutation
 from core.utils import append_validity_filter
@@ -19,6 +21,7 @@ from tasks_management.gql_queries import TaskGroupGQLType, TaskExecutorGQLType, 
     TaskFlowGQLType, TaskDecisionGQLType, TaskAssignmentTargetGQLType
 from tasks_management.models import TaskGroup, TaskExecutor, Task, TaskFlow, TaskDecision
 from tasks_management.apps import TasksManagementConfig, require
+from tasks_management.validation import pending_tasks
 
 
 def group_tasks_filter(group_id):
@@ -171,6 +174,10 @@ class Query(graphene.ObjectType):
         include_flows=graphene.Boolean(),
         include_groups=graphene.Boolean(),
     )
+    pending_task_count = graphene.Int(
+        entity_type=graphene.String(required=True),
+        entity_id=graphene.String(required=True),
+    )
 
     def resolve_task_group(self, info, **kwargs):
         # Same right as resolve_task_executor just below: TaskGroupGQLType is this
@@ -283,6 +290,33 @@ class Query(graphene.ObjectType):
             filters.append(Q(task__id=task_id))
         query = TaskDecision.objects.filter(*filters)
         return gql_optimizer.query(query, info)
+
+    def resolve_pending_task_count(self, info, entity_type, entity_id):
+        """
+        How many tasks would make validate_existing_task refuse an update of the entity,
+        `entity_type` being "app_label.model". Gated on reading the entity, not the task:
+        Task.get_queryset hides RECEIVED tasks from most users, whose update is refused
+        all the same, and the bare count tells no more than that refusal does.
+        None, never an error, when the entity cannot be found or read.
+        """
+        user = info.context.user
+        if type(user) is AnonymousUser or not user.id:
+            return None
+        try:
+            app_label, model_name = entity_type.split(".")
+            content_type = ContentType.objects.get_by_natural_key(app_label, model_name.lower())
+        except (ValueError, ContentType.DoesNotExist):
+            return None
+        model = content_type.model_class()
+        if model is None or not hasattr(model, "get_queryset") or not has_model_right(user, model, "query"):
+            return None
+        try:
+            entity = model._default_manager.filter(pk=entity_id)
+            if not model.get_queryset(entity, user).exists():
+                return None
+        except (ValueError, ValidationError):
+            return None
+        return pending_tasks(content_type, entity_id).count()
 
     @staticmethod
     def _check_permissions(user, perms):

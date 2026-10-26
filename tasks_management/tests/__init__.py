@@ -8,3 +8,4 @@ from tasks_management.tests.gql_flow_tests import GqlFlowTestCase
 from tasks_management.tests.task_history_gql_tests import TaskHistoryEntityStringTestCase
 from tasks_management.tests.task_entity_ids_gql_tests import TaskEntityIdsGQLTestCase
 from tasks_management.tests.task_group_id_gql_tests import TaskGroupIdGQLTestCase
+from tasks_management.tests.pending_task_count_gql_tests import PendingTaskCountGQLTestCase
