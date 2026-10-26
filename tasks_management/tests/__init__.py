@@ -6,3 +6,4 @@ from tasks_management.tests.flow_resolver_tests import FlowResolverTestCase
 from tasks_management.tests.flow_service_tests import FlowServiceTestCase
 from tasks_management.tests.gql_flow_tests import GqlFlowTestCase
 from tasks_management.tests.task_history_gql_tests import TaskHistoryEntityStringTestCase
+from tasks_management.tests.task_entity_ids_gql_tests import TaskEntityIdsGQLTestCase

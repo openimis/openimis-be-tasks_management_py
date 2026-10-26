@@ -86,8 +86,9 @@ class Query(graphene.ObjectType):
         if taskGroupId:
             filters.append(Q(task_group__id=taskGroupId))
 
+        # An empty list means "the tasks of no entity", not "no filter".
         entityIds = kwargs.get("entityIds")
-        if entityIds:
+        if entityIds is not None:
             filters.append(Q(entity_id__in=entityIds))
 
         # Scoped here, not only by the type hook: the entityString filter below
@@ -115,8 +116,9 @@ class Query(graphene.ObjectType):
         if taskGroupId:
             filters.append(Q(task_group__id=taskGroupId))
 
+        # An empty list means "the tasks of no entity", not "no filter".
         entityIds = kwargs.get("entityIds")
-        if entityIds:
+        if entityIds is not None:
             filters.append(Q(entity_id__in=entityIds))
 
         # Scoped here, not only by the type hook: the entityString filter below
