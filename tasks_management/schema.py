@@ -1,9 +1,13 @@
 import graphene
 import json
+import uuid
 import graphene_django_optimizer as gql_optimizer
 
+from django.apps import apps
 from django.contrib.auth.models import AnonymousUser
-from django.db.models import Count, Q
+from django.contrib.contenttypes.models import ContentType
+from django.db.models import CharField, Count, Q
+from django.db.models.functions import Cast
 
 from core.schema import OrderedDjangoFilterConnectionField
 from core.services import wait_for_mutation
@@ -15,6 +19,26 @@ from tasks_management.gql_queries import TaskGroupGQLType, TaskExecutorGQLType, 
     TaskFlowGQLType, TaskDecisionGQLType, TaskAssignmentTargetGQLType
 from tasks_management.models import TaskGroup, TaskExecutor, Task, TaskFlow, TaskDecision
 from tasks_management.apps import TasksManagementConfig, require
+
+
+def group_tasks_filter(group_id):
+    """
+    The tasks of an individual-module group: those on the group itself and those on any
+    of its membership rows. A removed member's row is only soft-deleted, so its tasks stay
+    in the group's history. A malformed id, or no individual module, matches no task.
+    """
+    try:
+        group_id = uuid.UUID(str(group_id))
+        group_model = apps.get_model("individual", "Group")
+        member_model = apps.get_model("individual", "GroupIndividual")
+    except (ValueError, LookupError):
+        return Q(pk__in=[])
+    # A subquery rather than a list of ids, which MSSQL caps at 2100 parameters.
+    member_ids = member_model.objects.filter(group_id=group_id).annotate(
+        id_string=Cast("id", output_field=CharField())).values("id_string")
+    on_group = Q(entity_type=ContentType.objects.get_for_model(group_model), entity_id=str(group_id))
+    on_member = Q(entity_type=ContentType.objects.get_for_model(member_model), entity_id__in=member_ids)
+    return on_group | on_member
 
 
 class Query(graphene.ObjectType):
@@ -86,9 +110,14 @@ class Query(graphene.ObjectType):
         if taskGroupId:
             filters.append(Q(task_group__id=taskGroupId))
 
+        # An empty list means "the tasks of no entity", not "no filter".
         entityIds = kwargs.get("entityIds")
-        if entityIds:
+        if entityIds is not None:
             filters.append(Q(entity_id__in=entityIds))
+
+        groupId = kwargs.get("groupId")
+        if groupId:
+            filters.append(group_tasks_filter(groupId))
 
         # Scoped here, not only by the type hook: the entityString filter below
         # walks the rows in Python, and must only see the ones the user may.
@@ -115,9 +144,14 @@ class Query(graphene.ObjectType):
         if taskGroupId:
             filters.append(Q(task_group__id=taskGroupId))
 
+        # An empty list means "the tasks of no entity", not "no filter".
         entityIds = kwargs.get("entityIds")
-        if entityIds:
+        if entityIds is not None:
             filters.append(Q(entity_id__in=entityIds))
+
+        groupId = kwargs.get("groupId")
+        if groupId:
+            filters.append(group_tasks_filter(groupId))
 
         # Scoped here, not only by the type hook: the entityString filter below
         # walks the rows in Python, and must only see the ones the user may.
