@@ -8,6 +8,7 @@ from simple_history.utils import bulk_create_with_history
 from core.forms import User
 from tasks_management.apps import TasksManagementConfig
 from tasks_management.models import Task, TaskDecision, TaskExecutor, TaskFlowStep
+from tasks_management.notifications import notify_task_assignees
 from tasks_management.services import TaskService
 
 logger = logging.getLogger(__name__)
@@ -244,6 +245,7 @@ def _advance_or_complete(_task, _step, _user):
     # FE working unchanged: the task now belongs to the next step's pool.
     _task.task_group = next_step.task_group
     _task.save(username=_user.login_name)
+    notify_task_assignees(_task, "assigned")
     logger.info(
         "tasks_management.flow: task %s advanced from step order %s to %s (pool '%s')",
         _task.id, _step.order, next_step.order, next_step.task_group.code,
