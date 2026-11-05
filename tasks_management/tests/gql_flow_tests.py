@@ -172,3 +172,19 @@ class GqlFlowTestCase(TestCase):
 
         pool.refresh_from_db()
         self.assertFalse(pool.is_deleted)
+
+    def test_delete_task_group_mutation_deletes_unused_group(self):
+        """
+        A group no flow uses is deleted. The mutation passed the user in the
+        service payload as well, so validate_delete got it twice and every
+        delete failed with a TypeError.
+        """
+        from tasks_management.gql_mutations import DeleteTaskGroupMutation
+
+        group = TaskGroup(code='gql_unused', completion_policy='ANY')
+        group.save(username=self.admin.username)
+
+        DeleteTaskGroupMutation._mutate(self.admin, ids=[str(group.id)])
+
+        group.refresh_from_db()
+        self.assertTrue(group.is_deleted)

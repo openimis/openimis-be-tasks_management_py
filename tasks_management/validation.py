@@ -127,16 +127,23 @@ def validate_existing_task(data):
         except content_type.model_class().DoesNotExist:
             return [{"message": _("tasks_management.validation.entity_not_found") % {'entity_id': entity_id}}]
 
-        filtered_tasks = Task.objects.filter(
-            Q(entity_type=content_type) &
-            Q(entity_id=str(entity_id)) &
-            (Q(status=Task.Status.ACCEPTED) | Q(status=Task.Status.RECEIVED))
-        )
-
-        if filtered_tasks.exists():
+        if pending_tasks(content_type, entity_id).exists():
             return [
                 {"message": _("tasks_management.validation.another_task_pending") % {'instance': str(entity_instance)}}]
     return []
+
+
+def pending_tasks(content_type, entity_id):
+    """
+    The open tasks of an entity, any one of which makes validate_existing_task refuse
+    another. The pendingTaskCount query counts these same rows, so that what a form is
+    told before submitting and what the mutation refuses cannot disagree.
+    """
+    return Task.objects.filter(
+        Q(entity_type=content_type) &
+        Q(entity_id=str(entity_id)) &
+        (Q(status=Task.Status.ACCEPTED) | Q(status=Task.Status.RECEIVED))
+    )
 
 
 def validate_unique_task_source(task_sources, group_id=None, flow_id=None):

@@ -1,10 +1,16 @@
 import graphene
 import json
+import uuid
 import graphene_django_optimizer as gql_optimizer
 
+from django.apps import apps
 from django.contrib.auth.models import AnonymousUser
-from django.db.models import Count, Q
+from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
+from django.db.models import CharField, Count, Q
+from django.db.models.functions import Cast
 
+from core.rights_scope import has_model_right
 from core.schema import OrderedDjangoFilterConnectionField
 from core.services import wait_for_mutation
 from core.utils import append_validity_filter
@@ -14,7 +20,28 @@ from tasks_management.gql_mutations import CreateTaskGroupMutation, UpdateTaskGr
 from tasks_management.gql_queries import TaskGroupGQLType, TaskExecutorGQLType, TaskGQLType, TaskHistoryGQLType, \
     TaskFlowGQLType, TaskDecisionGQLType, TaskAssignmentTargetGQLType
 from tasks_management.models import TaskGroup, TaskExecutor, Task, TaskFlow, TaskDecision
-from tasks_management.apps import TasksManagementConfig
+from tasks_management.apps import TasksManagementConfig, require
+from tasks_management.validation import pending_tasks
+
+
+def group_tasks_filter(group_id):
+    """
+    The tasks of an individual-module group: those on the group itself and those on any
+    of its membership rows. A removed member's row is only soft-deleted, so its tasks stay
+    in the group's history. A malformed id, or no individual module, matches no task.
+    """
+    try:
+        group_id = uuid.UUID(str(group_id))
+        group_model = apps.get_model("individual", "Group")
+        member_model = apps.get_model("individual", "GroupIndividual")
+    except (ValueError, LookupError):
+        return Q(pk__in=[])
+    # A subquery rather than a list of ids, which MSSQL caps at 2100 parameters.
+    member_ids = member_model.objects.filter(group_id=group_id).annotate(
+        id_string=Cast("id", output_field=CharField())).values("id_string")
+    on_group = Q(entity_type=ContentType.objects.get_for_model(group_model), entity_id=str(group_id))
+    on_member = Q(entity_type=ContentType.objects.get_for_model(member_model), entity_id__in=member_ids)
+    return on_group | on_member
 
 
 class Query(graphene.ObjectType):
@@ -73,6 +100,8 @@ class Query(graphene.ObjectType):
     )
 
     def resolve_task(self, info, **kwargs):
+        user = info.context.user
+        Query._require(user, "task", "query")
         filters = append_validity_filter(**kwargs)
 
         client_mutation_id = kwargs.get("client_mutation_id")
@@ -84,12 +113,18 @@ class Query(graphene.ObjectType):
         if taskGroupId:
             filters.append(Q(task_group__id=taskGroupId))
 
+        # An empty list means "the tasks of no entity", not "no filter".
         entityIds = kwargs.get("entityIds")
-        if entityIds:
+        if entityIds is not None:
             filters.append(Q(entity_id__in=entityIds))
 
-        # not checking perms because get_queryset filters tasks assigned to user
-        query = Task.objects.filter(*filters)
+        groupId = kwargs.get("groupId")
+        if groupId:
+            filters.append(group_tasks_filter(groupId))
+
+        # Scoped here, not only by the type hook: the entityString filter below
+        # walks the rows in Python, and must only see the ones the user may.
+        query = Task.get_queryset(Task.objects.filter(*filters), user)
 
         entity_string = kwargs.get("entityString__Icontains")
         if entity_string:
@@ -99,6 +134,8 @@ class Query(graphene.ObjectType):
         return gql_optimizer.query(query, info)
 
     def resolve_task_history(self, info, **kwargs):
+        user = info.context.user
+        Query._require(user, "task", "query")
         filters = append_validity_filter(**kwargs)
 
         client_mutation_id = kwargs.get("client_mutation_id")
@@ -110,12 +147,18 @@ class Query(graphene.ObjectType):
         if taskGroupId:
             filters.append(Q(task_group__id=taskGroupId))
 
+        # An empty list means "the tasks of no entity", not "no filter".
         entityIds = kwargs.get("entityIds")
-        if entityIds:
+        if entityIds is not None:
             filters.append(Q(entity_id__in=entityIds))
 
-        # not checking perms because get_queryset filters tasks assigned to user
-        query = Task.history.filter(*filters)
+        groupId = kwargs.get("groupId")
+        if groupId:
+            filters.append(group_tasks_filter(groupId))
+
+        # Scoped here, not only by the type hook: the entityString filter below
+        # walks the rows in Python, and must only see the ones the user may.
+        query = Task.get_queryset(Task.history.filter(*filters), user)
 
         entity_string = kwargs.get("entityString__Icontains")
         if entity_string:
@@ -131,8 +174,18 @@ class Query(graphene.ObjectType):
         include_flows=graphene.Boolean(),
         include_groups=graphene.Boolean(),
     )
+    pending_task_count = graphene.Int(
+        entity_type=graphene.String(required=True),
+        entity_id=graphene.String(required=True),
+    )
 
     def resolve_task_group(self, info, **kwargs):
+        # Same right as resolve_task_executor just below: TaskGroupGQLType is this
+        # module's only type without get_queryset nor ScopedQuerysetMixin, so nothing
+        # restricted either the action or the rows.
+        Query._check_permissions(
+            info.context.user, TasksManagementConfig.gql_task_group_search_perms
+        )
         filters = append_validity_filter(**kwargs)
 
         client_mutation_id = kwargs.get("client_mutation_id", None)
@@ -238,9 +291,41 @@ class Query(graphene.ObjectType):
         query = TaskDecision.objects.filter(*filters)
         return gql_optimizer.query(query, info)
 
+    def resolve_pending_task_count(self, info, entity_type, entity_id):
+        """
+        How many tasks would make validate_existing_task refuse an update of the entity,
+        `entity_type` being "app_label.model". Gated on reading the entity, not the task:
+        Task.get_queryset hides RECEIVED tasks from most users, whose update is refused
+        all the same, and the bare count tells no more than that refusal does.
+        None, never an error, when the entity cannot be found or read.
+        """
+        user = info.context.user
+        if type(user) is AnonymousUser or not user.id:
+            return None
+        try:
+            app_label, model_name = entity_type.split(".")
+            content_type = ContentType.objects.get_by_natural_key(app_label, model_name.lower())
+        except (ValueError, ContentType.DoesNotExist):
+            return None
+        model = content_type.model_class()
+        if model is None or not hasattr(model, "get_queryset") or not has_model_right(user, model, "query"):
+            return None
+        try:
+            entity = model._default_manager.filter(pk=entity_id)
+            if not model.get_queryset(entity, user).exists():
+                return None
+        except (ValueError, ValidationError):
+            return None
+        return pending_tasks(content_type, entity_id).count()
+
     @staticmethod
     def _check_permissions(user, perms):
         if type(user) is AnonymousUser or not user.id or not user.has_perms(perms):
+            raise PermissionError("Unauthorized")
+
+    @staticmethod
+    def _require(user, entity, action):
+        if type(user) is AnonymousUser or not user.id or not require(user, entity, action):
             raise PermissionError("Unauthorized")
 
 
