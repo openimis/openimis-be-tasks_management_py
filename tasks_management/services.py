@@ -20,6 +20,7 @@ from tasks_management.apps import TasksManagementConfig
 from tasks_management.models import TaskGroup, TaskExecutor, Task, TaskFlow, TaskFlowStep
 from tasks_management.validation import TaskGroupValidation, TaskExecutorValidation, TaskValidation, \
     TaskFlowValidation, validate_task_flow_assignment
+from tasks_management.notifications import notify_task_assignees
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,10 @@ class TaskService(BaseService):
                     "task_group": first_step.task_group,
                     "status": Task.Status.ACCEPTED,
                 }
-                return super().create(obj_data)
+                result = super().create(obj_data)
+                task = Task.objects.get(id=result['data']['id'])
+                notify_task_assignees(task)
+                return result
             logger.error(
                 "tasks_management.flow: flow '%s' matched source '%s' but has no "
                 "steps; falling back to group binding", flow.code, source,
@@ -58,7 +62,10 @@ class TaskService(BaseService):
         task_group_query = TaskGroup.objects.filter(json_ext__contains={"task_sources": [source]})
         if task_group_query:
             obj_data = {**obj_data, "task_group": task_group_query.first(), "status": Task.Status.ACCEPTED}
-        return super().create(obj_data)
+        result = super().create(obj_data)
+        task = Task.objects.get(id=result['data']['id'])
+        notify_task_assignees(task)
+        return result
 
     def _match_flow_for_source(self, source, obj_data):
         if not source or source in (TasksManagementConfig.flow_ineligible_sources or []):
@@ -96,7 +103,10 @@ class TaskService(BaseService):
             with transaction.atomic():
                 task = self.OBJECT_TYPE.objects.select_for_update(of=('self',)).filter(
                     id=obj_data.get('id')).first()
-                return super().update(self._apply_flow_assignment(task, obj_data, assignment))
+                result = super().update(self._apply_flow_assignment(task, obj_data, assignment))
+                task.refresh_from_db()
+                notify_task_assignees(task)
+                return result
         task = self.OBJECT_TYPE.objects.filter(id=obj_data.get('id')).first()
         if task and task.flow_id:
             incoming_group = obj_data.get('task_group_id', obj_data.get('task_group'))
@@ -119,7 +129,11 @@ class TaskService(BaseService):
                     "only be closed by completing its current step, not by setting "
                     "status directly" % (task.id, task.flow.code)
                 )
-        return super().update(obj_data)
+        result = super().update(obj_data)
+        if task:
+            task.refresh_from_db()
+            notify_task_assignees(task)
+        return result
 
     def _pop_flow_assignment(self, obj_data):
         """
@@ -196,6 +210,7 @@ class TaskService(BaseService):
                 obj = self.OBJECT_TYPE.objects.get(id=obj_data['id'])
                 obj.status = Task.Status.FAILED if obj_data.get('failed', False) else Task.Status.COMPLETED
                 obj.save(username=self.user.login_name)
+                notify_task_assignees(obj, "failed" if obj_data.get('failed', False) else "completed")
                 return output_result_success({'task': model_representation(obj), 'user': {'id': f"{self.user.id}"}})
         except Exception as exc:
             return output_exception(model_name=self.OBJECT_TYPE.__name__, method="complete", exception=exc)
