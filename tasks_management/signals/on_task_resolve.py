@@ -17,11 +17,36 @@ logger = logging.getLogger(__name__)
 _FLOW_VERDICTS = (TaskDecision.Decision.APPROVED, TaskDecision.Decision.FAILED)
 
 
+def _current_executor_ids(_task):
+    return {
+        str(user_id) for user_id in _task.task_group.taskexecutor_set.filter(
+            task_group__is_deleted=False, is_deleted=False,
+        ).values_list('user_id', flat=True)
+    }
+
+
+def _executor_verdicts(_task):
+    """
+    The verdicts of the task group's current executors, and only theirs.
+
+    business_status is keyed by user id. Counting every value let an entry
+    under any key - another user's id, a removed executor, an arbitrary string -
+    count as an approval. resolve_task now stores only the caller's own entry;
+    this side ignores whatever else a task may already hold.
+    """
+    executor_ids = _current_executor_ids(_task)
+    return [
+        verdict for key, verdict in (_task.business_status or {}).items()
+        if key in executor_ids
+    ]
+
+
 def resolve_task_all(_task, _user):
-    if 'FAILED' in _task.business_status.values():
+    verdicts = _executor_verdicts(_task)
+    if 'FAILED' in verdicts:
         TaskService(_user).complete_task({"id": _task.id, 'failed': True})
-    n_of_approves = sum(map('APPROVED'.__eq__, _task.business_status.values()))
-    n_of_executors = _task.task_group.taskexecutor_set.filter(task_group__is_deleted=False, is_deleted=False).count()
+    n_of_approves = sum(map('APPROVED'.__eq__, verdicts))
+    n_of_executors = len(_current_executor_ids(_task))
     if not n_of_executors:
         logger.warning("No valid executors of task with policy ALL %s", str(_task.uuid))
     if n_of_approves == n_of_executors:
@@ -29,9 +54,10 @@ def resolve_task_all(_task, _user):
 
 
 def resolve_task_any(_task, _user):
-    if 'FAILED' in _task.business_status.values():
+    verdicts = _executor_verdicts(_task)
+    if 'FAILED' in verdicts:
         TaskService(_user).complete_task({"id": _task.id, 'failed': True})
-    if 'APPROVED' in _task.business_status.values():
+    if 'APPROVED' in verdicts:
         TaskService(_user).complete_task({"id": _task.id})
 
 
@@ -47,7 +73,8 @@ def resolve_task_n(_task, _user):
     rather than silently falling back to ANY - the group is misconfigured,
     and approving on one vote is the least safe reading of "N".
     """
-    if 'FAILED' in _task.business_status.values():
+    verdicts = _executor_verdicts(_task)
+    if 'FAILED' in verdicts:
         TaskService(_user).complete_task({"id": _task.id, 'failed': True})
         return
     threshold = _task.task_group.threshold
@@ -57,7 +84,7 @@ def resolve_task_n(_task, _user):
             "threshold; holding", _task.id, _task.task_group.code,
         )
         return
-    n_of_approves = sum(map('APPROVED'.__eq__, _task.business_status.values()))
+    n_of_approves = sum(map('APPROVED'.__eq__, verdicts))
     if n_of_approves >= threshold:
         TaskService(_user).complete_task({"id": _task.id})
 

@@ -212,7 +212,7 @@ class TaskService(BaseService):
         try:
             self.validation_class.validate_update(self.user, **obj_data)
             obj = self.OBJECT_TYPE.objects.get(id=obj_data['id'])
-            incoming_status = obj_data.get('business_status')
+            incoming_status = self._own_verdict(obj_data.get('business_status'))
             additional_data = obj_data.get('additional_data')
             self._update_task_business_status(obj, incoming_status, additional_data)
             self._insert_additional_data_to_json_ext(obj, additional_data)
@@ -230,6 +230,28 @@ class TaskService(BaseService):
             })
         except Exception as exc:
             return output_exception(model_name=self.OBJECT_TYPE.__name__, method="resolve", exception=exc)
+
+    def _own_verdict(self, incoming_status):
+        """
+        Keep only the caller's own entry of an incoming business_status.
+
+        business_status is keyed by executor id, and the completion policies
+        count its values. A resolver speaks for themselves only: an entry under
+        another user's id would be recorded as that user's vote, so an executor
+        could approve a task on behalf of the others. Flow tasks already read
+        only the caller's key; this applies the same rule before the merge, so
+        flat tasks get it too and the stored history never holds a forged entry.
+        """
+        if not isinstance(incoming_status, dict):
+            raise ValidationError("tasks_management: business_status must be an object keyed by user id")
+        own_key = str(self.user.id)
+        ignored = [key for key in incoming_status if key != own_key]
+        if ignored:
+            logger.warning(
+                "tasks_management: resolve by user %s ignored business_status entries "
+                "of other users %s", own_key, ignored,
+            )
+        return {own_key: incoming_status[own_key]} if own_key in incoming_status else {}
 
     def _update_task_business_status(self, task, incoming_status, additional_data):
         task.business_status = self.__deep_merge(task.business_status, incoming_status)
