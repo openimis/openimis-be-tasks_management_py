@@ -106,6 +106,14 @@ verdict shape the flow engine expects. A flow match against one of these
 sources is skipped at creation, and a manual `updateTask(flowId: ...)`
 against one of their tasks is rejected.
 
+## Flat task votes
+`business_status` is keyed by user id. `resolveTask` keeps only the caller's own
+entry and drops any other key, so an executor cannot vote for someone else. The
+ALL / ANY / N policies of a flat task then count only the entries of the task
+group's current executors: a privileged resolver (admin or triage rights) who is
+not an executor may still resolve, but their verdict does not count towards
+completion.
+
 ## Creating execution action handlers and business event handlers
 When user action specified by the task is being passed to backend, the task service sends ``task_service.resolve_task`` 
 signal. The approach for handler is to bind to ``after`` signal and check the specific ``executor_action_event`` of the 
