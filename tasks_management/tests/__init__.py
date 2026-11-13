@@ -1,11 +1,11 @@
-from tasks_management.tests.task_group_service_tests import TaskGroupServiceTest
-from tasks_management.tests.task_service_tests import TaskServiceTestCase
-from tasks_management.tests.task_event_tests import TaskEventTestCase
-from tasks_management.tests.checker_logic_service_tests import CheckerLogicServiceTestCase
-from tasks_management.tests.flow_resolver_tests import FlowResolverTestCase
-from tasks_management.tests.flow_service_tests import FlowServiceTestCase
-from tasks_management.tests.gql_flow_tests import GqlFlowTestCase
-from tasks_management.tests.task_history_gql_tests import TaskHistoryEntityStringTestCase
-from tasks_management.tests.task_entity_ids_gql_tests import TaskEntityIdsGQLTestCase
-from tasks_management.tests.task_group_id_gql_tests import TaskGroupIdGQLTestCase
-from tasks_management.tests.pending_task_count_gql_tests import PendingTaskCountGQLTestCase
+from tasks_management.tests.task_group_service_tests import TaskGroupServiceTest  # noqa: F401
+from tasks_management.tests.task_service_tests import TaskServiceTestCase  # noqa: F401
+from tasks_management.tests.task_event_tests import TaskEventTestCase  # noqa: F401
+from tasks_management.tests.checker_logic_service_tests import CheckerLogicServiceTestCase  # noqa: F401
+from tasks_management.tests.flow_resolver_tests import FlowResolverTestCase  # noqa: F401
+from tasks_management.tests.flow_service_tests import FlowServiceTestCase  # noqa: F401
+from tasks_management.tests.gql_flow_tests import GqlFlowTestCase  # noqa: F401
+from tasks_management.tests.task_history_gql_tests import TaskHistoryEntityStringTestCase  # noqa: F401
+from tasks_management.tests.task_entity_ids_gql_tests import TaskEntityIdsGQLTestCase  # noqa: F401
+from tasks_management.tests.task_group_id_gql_tests import TaskGroupIdGQLTestCase  # noqa: F401
+from tasks_management.tests.pending_task_count_gql_tests import PendingTaskCountGQLTestCase  # noqa: F401

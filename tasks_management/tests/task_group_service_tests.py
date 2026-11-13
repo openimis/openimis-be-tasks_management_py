@@ -19,7 +19,7 @@ class TaskGroupServiceTest(TestCase, TaskDataMixin):
 
         cls.user = LogInHelper().get_or_create_user_api()
         cls.task_executor = LogInHelper().get_or_create_user_api(
-                username='TaskExecutor')
+            username='TaskExecutor')
         cls.service = TaskGroupService(cls.user)
         cls.init_data()
         cls.query_all = TaskGroup.objects.filter(is_deleted=False)
@@ -27,7 +27,6 @@ class TaskGroupServiceTest(TestCase, TaskDataMixin):
             **cls.task_group_add_payload_any,
             "user_ids": [cls.task_executor.id]
         }
-        
 
     def test_add_task_group(self):
         result = self.service.create(self.payload)

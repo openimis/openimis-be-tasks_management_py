@@ -1,6 +1,5 @@
 import copy
 import datetime
-import decimal
 import logging
 import uuid
 from abc import abstractmethod, ABC
@@ -9,7 +8,6 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 from django.core.exceptions import ValidationError
 
-from core.datetimes.ad_datetime import AdDate, AdDatetime
 from core.forms import User
 from core.models import HistoryModel
 from core.services import BaseService
@@ -788,7 +786,6 @@ class CheckerLogicServiceMixin(CreateCheckerLogicServiceMixin,
     Provides default implementation for creating "create", "update", and "delete" tasks for maker-checker logic
     To be used in implementations of core.services.BaseService.
     """
-    pass
 
 
 def on_task_complete_service_handler(service_type):

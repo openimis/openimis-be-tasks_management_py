@@ -24,7 +24,7 @@ class TaskServiceTestCase(TestCase, TaskDataMixin):
         super(TaskServiceTestCase, cls).setUpClass()
         cls.user = LogInHelper().get_or_create_user_api()
         cls.task_executor = LogInHelper().get_or_create_user_api(
-                username='TaskExecutor')
+            username='TaskExecutor')
         cls.init_data()
         cls.taskgroup_all_id = cls.__create_taskgroup(cls.task_group_add_payload_all)
         cls.taskgroup_n_id = cls.__create_taskgroup(cls.task_group_add_payload_n)

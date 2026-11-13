@@ -4,6 +4,7 @@ from django.test import TestCase
 from tasks_management.services import BaseService, CheckerLogicServiceMixin
 from tasks_management.models import Task
 
+
 class CheckerLogicServiceTestCase(TestCase):
     @classmethod
     def setUpClass(cls):

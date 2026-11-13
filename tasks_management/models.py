@@ -180,15 +180,15 @@ class Task(HistoryModel):
         COMPLETED = 'COMPLETED', _('Completed')
         FAILED = 'FAILED', _('Failed')
 
-    source = models.CharField(max_length=255,  blank=True, null=True)
+    source = models.CharField(max_length=255, blank=True, null=True)
     entity_type = models.ForeignKey(ContentType, models.DO_NOTHING, blank=True, null=True, unique=False)
-    entity_id = models.CharField(max_length=255,  blank=True, null=True)
+    entity_id = models.CharField(max_length=255, blank=True, null=True)
     entity = GenericForeignKey('entity_type', 'entity_id')
     status = models.CharField(max_length=255, choices=Status.choices, default=Status.RECEIVED)
     executor_action_event = models.CharField(max_length=255, blank=True, null=True)
-    business_status = models.JSONField( blank=True,default=dict)
+    business_status = models.JSONField(blank=True, default=dict)
     business_event = models.CharField(max_length=255, blank=True, null=True)
-    task_group = models.ForeignKey(TaskGroup, on_delete=models.DO_NOTHING,  blank=True, null=True)
+    task_group = models.ForeignKey(TaskGroup, on_delete=models.DO_NOTHING, blank=True, null=True)
     data = models.JSONField(blank=True, default=dict)
     business_data_serializer = models.CharField(max_length=255, blank=True, null=True)
     flow = models.ForeignKey(
@@ -214,7 +214,7 @@ class Task(HistoryModel):
         return configured_perms("task", action)
 
     @classmethod
-    def get_queryset(cls, queryset, user=None):
+    def get_queryset(cls, queryset, user=None, *, validity=None, audits=None):
         """
         The tasks `user` may see: all of them for triage, otherwise those of the
         groups the user is a live executor of, once they have left RECEIVED.
@@ -227,9 +227,7 @@ class Task(HistoryModel):
         from tasks_management.gql_queries import is_task_triage
 
         user = cls.scoping_user(user)
-        if queryset is None:
-            queryset = cls.objects.all()
-        queryset = queryset.filter(is_deleted=False)
+        queryset = cls.apply_row_filters(queryset, validity, audits, default=cls.filter_queryset)
         if user is None or getattr(user, "is_anonymous", True):
             return queryset.none()
         if user.is_superuser or is_task_triage(user):
