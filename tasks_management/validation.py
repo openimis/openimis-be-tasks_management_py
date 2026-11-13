@@ -113,7 +113,7 @@ def validate_not_empty_field(string, field):
         TaskGroupValidation().validate_string_whitespace_end(string)
         TaskGroupValidation().validate_string_whitespace_start(string)
         return []
-    except ValidationError as e:
+    except ValidationError:
         return [{"message": _("tasks_management.validation.field_empty") % {'field': field}}]
 
 
@@ -140,9 +140,9 @@ def pending_tasks(content_type, entity_id):
     told before submitting and what the mutation refuses cannot disagree.
     """
     return Task.objects.filter(
-        Q(entity_type=content_type) &
-        Q(entity_id=str(entity_id)) &
-        (Q(status=Task.Status.ACCEPTED) | Q(status=Task.Status.RECEIVED))
+        Q(entity_type=content_type)
+        & Q(entity_id=str(entity_id))
+        & (Q(status=Task.Status.ACCEPTED) | Q(status=Task.Status.RECEIVED))
     )
 
 

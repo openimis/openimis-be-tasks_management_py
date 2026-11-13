@@ -466,7 +466,6 @@ class FlowResolverTestCase(TestCase):
         self.assertEqual(task.status, Task.Status.COMPLETED)
         self.assertEqual(task.version, version_after_completion)
 
-
     # ------------------------------------------- review round 2 regressions
 
     def test_reviewer_in_two_pools_keeps_later_step_rejection(self):

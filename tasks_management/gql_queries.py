@@ -76,7 +76,7 @@ class TaskGQLType(ScopedQuerysetMixin, DjangoObjectType):
             except ImportError:
                 return f"Error: Module '{module_path}' not found."
             except AttributeError:
-                return f"Error: Attribute not found in the module or class."
+                return "Error: Attribute not found in the module or class."
             except Exception as e:
                 return f"Error: {str(e)}"
 
@@ -133,7 +133,7 @@ class TaskHistoryGQLType(DjangoObjectType):
             except ImportError:
                 return f"Error: Module '{module_path}' not found."
             except AttributeError:
-                return f"Error: Attribute not found in the module or class."
+                return "Error: Attribute not found in the module or class."
             except Exception as e:
                 return f"Error: {str(e)}"
 

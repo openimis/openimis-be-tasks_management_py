@@ -80,7 +80,7 @@ require = RIGHTS.require
 
 
 DEFAULT_CONFIG = {
-    
+
 
     # To be used if task should use generic resolver
     "default_executor_event": "default",

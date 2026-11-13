@@ -543,4 +543,3 @@ class FlowServiceTestCase(TestCase):
 
         result = self.service.delete({'id': new_flow_id})
         self.assertFalse(result.get('success'), result)
-

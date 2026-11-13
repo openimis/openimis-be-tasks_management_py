@@ -1,5 +1,4 @@
 import graphene
-import json
 import uuid
 import graphene_django_optimizer as gql_optimizer
 
