@@ -14,6 +14,7 @@ jobs:
     uses: openimis/openimis-be_py/.github/workflows/ci_module.yml@develop
     secrets:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      LOKALISE_APIKEY: ${{ secrets.LOKALISE_APIKEY }}
     with:
       SONAR_PROJECT_KEY: openimis_openimis-be-tasks_management_py
       SONAR_ORGANIZATION: openimis-1
