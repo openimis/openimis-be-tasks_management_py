@@ -1,12 +1,97 @@
+import logging
+
 from django.db import models
 
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
 from core.models import HistoryModel, HistoryBusinessModel, User, UUIDModel, ObjectMutation, MutationLog
 from core.models import ParentScope
+
+logger = logging.getLogger(__name__)
+
+
+def entity_display_string(entity):
+    """
+    The text the `entityString_Icontains` task filter searches: `str(entity)`, the
+    same text the GraphQL `entityString` field shows, or None when the task has no
+    entity (or its entity no longer exists).
+
+    A broken `__str__` on some entity model must not prevent saving the task: the
+    task is then simply not found by an entity search, and the failure is logged.
+    """
+    if entity is None:
+        return None
+    try:
+        return str(entity)
+    except Exception:
+        logger.warning(
+            "tasks_management: cannot build the entity string of %s %s",
+            type(entity).__name__, getattr(entity, "pk", None), exc_info=True,
+        )
+        return None
+
+
+def refresh_entity_strings(queryset, batch_size=500):
+    """
+    Recompute `entity_string` for the rows of `queryset` (tasks or historical
+    tasks) from their current entity, in batches. Returns the number of rows
+    whose text changed.
+
+    Rows are updated with `bulk_update`, so this neither bumps the task version
+    nor writes history: it is a cache refresh, not a change of the task. Used by
+    the backfill migration and the `refresh_task_entity_string` command.
+
+    The entity is looked up per batch and per content type with one query, like
+    `prefetch_related("entity")` would; this also works on the historical model,
+    which carries no GenericForeignKey. `str()` of some entities (a payroll, an
+    upload record) still reads related rows of its own, which is why this runs
+    once here rather than on every search.
+    """
+    queryset = queryset.order_by("pk")
+    changed = 0
+    last_pk = None
+    while True:
+        batch_qs = queryset if last_pk is None else queryset.filter(pk__gt=last_pk)
+        batch = list(batch_qs[:batch_size])
+        if not batch:
+            return changed
+        last_pk = batch[-1].pk
+
+        ids_by_type = {}
+        for row in batch:
+            if row.entity_type_id and row.entity_id:
+                ids_by_type.setdefault(row.entity_type_id, set()).add(row.entity_id)
+        entities = {}
+        for type_id, entity_ids in ids_by_type.items():
+            model = ContentType.objects.get_for_id(type_id).model_class()
+            if model is None:
+                continue
+            keys = {}
+            for entity_id in entity_ids:
+                # Keyed by the raw stored id, whatever its spelling (a UUID in
+                # upper case, say), as the GenericForeignKey resolves it.
+                try:
+                    keys[entity_id] = model._meta.pk.to_python(entity_id)
+                except ValidationError:
+                    continue  # not a valid key for this model: no entity
+            found = model._base_manager.in_bulk(set(keys.values()))
+            for entity_id, key in keys.items():
+                entities[(type_id, entity_id)] = found.get(key)
+
+        to_update = []
+        for row in batch:
+            entity = entities.get((row.entity_type_id, row.entity_id))
+            text = entity_display_string(entity)
+            if row.entity_string != text:
+                row.entity_string = text
+                to_update.append(row)
+        if to_update:
+            queryset.model._base_manager.bulk_update(to_update, ["entity_string"])
+            changed += len(to_update)
 
 
 class TaskGroup(HistoryModel):
@@ -184,6 +269,10 @@ class Task(HistoryModel):
     entity_type = models.ForeignKey(ContentType, models.DO_NOTHING, blank=True, null=True, unique=False)
     entity_id = models.CharField(max_length=255, blank=True, null=True)
     entity = GenericForeignKey('entity_type', 'entity_id')
+    # `str(entity)` as of the task's last save, so that `entityString_Icontains`
+    # filters in SQL instead of resolving every task's entity in Python. Set by
+    # save(); the GraphQL `entityString` field still resolves the live entity.
+    entity_string = models.TextField(blank=True, null=True, editable=False)
     status = models.CharField(max_length=255, choices=Status.choices, default=Status.RECEIVED)
     executor_action_event = models.CharField(max_length=255, blank=True, null=True)
     business_status = models.JSONField(blank=True, default=dict)
@@ -197,6 +286,53 @@ class Task(HistoryModel):
     current_step = models.ForeignKey(
         TaskFlowStep, on_delete=models.DO_NOTHING, blank=True, null=True, related_name='tasks_at_step'
     )
+
+    def save(self, *args, **kwargs):
+        # Refreshed on every save, not only when the entity changes: a task is
+        # saved at each status change and vote, so an entity renamed while its
+        # task is open is picked up at the next step. Between two saves the
+        # text is a snapshot (see `refresh_task_entity_string` to resync).
+        self.entity_string = entity_display_string(self._entity_or_none())
+        return super().save(*args, **kwargs)
+
+    def _entity_or_none(self):
+        """
+        The entity as stored now, read from the database rather than through the
+        GenericForeignKey: a task served by the model cache still holds the entity
+        object it was cached with, so `self.entity` would return the old name.
+        """
+        if self.entity_type_id is None or not self.entity_id:
+            return None
+        try:
+            model = ContentType.objects.get_for_id(self.entity_type_id).model_class()
+            return model._base_manager.filter(pk=self.entity_id).first() if model else None
+        except (ValidationError, ValueError):
+            return None  # not a valid key for that model: no entity
+
+    @classmethod
+    def bulk_save(cls, data_list, user, *args, **kwargs):
+        """
+        HistoryModel.bulk_save writes with bulk_create/bulk_update, which bypass
+        save(): compute each row's entity_string up front so it is written, and
+        copied into the history rows, with the rest of the data.
+        """
+        if not data_list:
+            return super().bulk_save(data_list, user, *args, **kwargs)
+        ids = [data["id"] for data in data_list if data.get("id")]
+        existing = {
+            str(task.id): task for task in cls._base_manager.filter(id__in=ids).only("id", "entity_type", "entity_id")
+        }
+        prepared = []
+        for data in data_list:
+            probe = cls()
+            current = existing.get(str(data.get("id")))
+            if current is not None:
+                probe.entity_type_id, probe.entity_id = current.entity_type_id, current.entity_id
+            for key in ("entity_type", "entity_type_id", "entity_id", "entity"):
+                if key in data:
+                    setattr(probe, key, data[key])
+            prepared.append({**data, "entity_string": entity_display_string(probe._entity_or_none())})
+        return super().bulk_save(prepared, user, *args, **kwargs)
 
     @classmethod
     def get_rights(cls, action):
