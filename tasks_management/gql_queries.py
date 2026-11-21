@@ -10,7 +10,7 @@ from core import ExtendedConnection, prefix_filterset
 from core.gql_queries import UserGQLType
 from tasks_management.apps import TasksManagementConfig
 from tasks_management.models import TaskGroup, TaskExecutor, Task, TaskFlow, TaskFlowStep, TaskDecision
-from core.gql import ScopedQuerysetMixin
+from core.gql import HistoryTypeEnum, ScopedQuerysetMixin
 
 DICT_STRING = "{}"
 
@@ -90,6 +90,8 @@ class TaskHistoryGQLType(DjangoObjectType):
     uuid = graphene.String(source='uuid')
     business_data = graphene.JSONString()
     entity_string = graphene.String()
+
+    history_type = graphene.Field(HistoryTypeEnum, required=True)
 
     class Meta:
         model = Task.history.model
