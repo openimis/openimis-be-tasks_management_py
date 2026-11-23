@@ -33,13 +33,18 @@ from core.models import UUIDModel
 logger = logging.getLogger(__name__)
 
 
+def _literal(text):
+    """A text constant; typed, since Django 5 refuses a CharField Value mixed with TextFields."""
+    return Value(text, output_field=TextField())
+
+
 def _text(field):
     """A field as Python's f-string prints it: NULL reads "None"."""
-    return Coalesce(Cast(field, output_field=TextField()), Value("None"))
+    return Coalesce(Cast(field, output_field=TextField()), _literal("None"))
 
 
 def _concat(*parts):
-    """Strings are field names, Value() parts are literals."""
+    """Strings are field names, _literal() parts are literals."""
     return Concat(*(_text(p) if isinstance(p, str) else p for p in parts), output_field=TextField())
 
 
@@ -61,20 +66,20 @@ def _datetime_text(field):
     """
     if connection.vendor != "postgresql" or settings.USE_TZ:
         return None
-    return Coalesce(_NaiveDatetimeText(field), Value("None"))
+    return Coalesce(_NaiveDatetimeText(field), _literal("None"))
 
 
 def _user_label():
     # core.User.__str__: "(<type>) <username> [<id>]"
     user_type = Case(
-        When(i_user__isnull=False, then=Value("i")),
-        When(t_user__isnull=False, then=Value("t")),
-        When(officer__isnull=False, then=Value("o")),
-        When(claim_admin__isnull=False, then=Value("c")),
-        default=Value("?"),
+        When(i_user__isnull=False, then=_literal("i")),
+        When(t_user__isnull=False, then=_literal("t")),
+        When(officer__isnull=False, then=_literal("o")),
+        When(claim_admin__isnull=False, then=_literal("c")),
+        default=_literal("?"),
         output_field=TextField(),
     )
-    return _concat(Value("("), user_type, Value(") "), "username", Value(" ["), "id", Value("]"))
+    return _concat(_literal("("), user_type, _literal(") "), "username", _literal(" ["), "id", _literal("]"))
 
 
 def _upload_records_label(*prefix):
@@ -82,7 +87,7 @@ def _upload_records_label(*prefix):
     date_created = _datetime_text("date_created")
     if date_created is None:
         return None
-    return _concat(*prefix, "data_upload__source_name", Value(" "), "workflow", Value(" "), date_created)
+    return _concat(*prefix, "data_upload__source_name", _literal(" "), "workflow", _literal(" "), date_created)
 
 
 # The label of each entity type tasks point to, matching that model's __str__.
@@ -91,12 +96,12 @@ def _upload_records_label(*prefix):
 # searched, see _has_own_str.
 LABEL_EXPRESSIONS = {
     "core.user": _user_label,
-    "individual.individual": lambda: _concat("first_name", Value(" "), "last_name"),
-    "individual.individualdatauploadrecords": lambda: _upload_records_label(Value("Individual Import - ")),
-    "social_protection.benefitplan": lambda: _concat(Value("Benefit Plan "), "code"),
+    "individual.individual": lambda: _concat("first_name", _literal(" "), "last_name"),
+    "individual.individualdatauploadrecords": lambda: _upload_records_label(_literal("Individual Import - ")),
+    "social_protection.benefitplan": lambda: _concat(_literal("Benefit Plan "), "code"),
     "social_protection.benefitplandatauploadrecords": lambda: _upload_records_label(
-        "benefit_plan__code", Value(" ")),
-    "payroll.payroll": lambda: _concat(Value("Payroll "), "name", Value(" - "), "id"),
+        "benefit_plan__code", _literal(" ")),
+    "payroll.payroll": lambda: _concat(_literal("Payroll "), "name", _literal(" - "), "id"),
 }
 
 
