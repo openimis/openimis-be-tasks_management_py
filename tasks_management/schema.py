@@ -121,13 +121,14 @@ class Query(graphene.ObjectType):
         if groupId:
             filters.append(group_tasks_filter(groupId))
 
-        # Matched in SQL on the text stored at save time (OP-3332), not by
-        # resolving each task's entity in Python.
+        # Scoped here, not only by the type hook: the entityString filter below
+        # walks the rows in Python, and must only see the ones the user may.
+        query = Task.get_queryset(Task.objects.filter(*filters), user)
+
         entity_string = kwargs.get("entityString__Icontains")
         if entity_string:
-            filters.append(Q(entity_string__icontains=entity_string))
-
-        query = Task.get_queryset(Task.objects.filter(*filters), user)
+            task_ids = [task.id for task in query if entity_string.lower() in str(task.entity).lower()]
+            query = query.filter(id__in=task_ids)
 
         return gql_optimizer.query(query, info)
 
@@ -154,13 +155,14 @@ class Query(graphene.ObjectType):
         if groupId:
             filters.append(group_tasks_filter(groupId))
 
-        # Matched in SQL on the text stored at save time (OP-3332), not by
-        # resolving each task's entity in Python.
+        # Scoped here, not only by the type hook: the entityString filter below
+        # walks the rows in Python, and must only see the ones the user may.
+        query = Task.get_queryset(Task.history.filter(*filters), user)
+
         entity_string = kwargs.get("entityString__Icontains")
         if entity_string:
-            filters.append(Q(entity_string__icontains=entity_string))
-
-        query = Task.get_queryset(Task.history.filter(*filters), user)
+            task_ids = [task.id for task in query if entity_string.lower() in str(task.entity).lower()]
+            query = query.filter(id__in=task_ids)
 
         return gql_optimizer.query(query, info)
 

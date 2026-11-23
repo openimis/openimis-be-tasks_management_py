@@ -13,21 +13,6 @@ It is dedicated to be deployed as a module of [openimis-be_py](https://github.co
 ## GraphQl Queries
 * task, taskGroup, taskExecutor, taskFlow, taskDecision, taskAssignmentTargets
 
-### Searching tasks by entity
-`task` and `taskHistory` take `entityString_Icontains`, matched in SQL against
-`Task.entity_string`: the `str()` of the task's entity, stored each time the task
-is saved (including through `Task.bulk_save`). A task without an entity stores
-NULL and is never matched. The text is a snapshot: an entity renamed after its
-task was last saved is found under its old name until the task is saved again.
-The `entityString` output field still resolves the live entity.
-
-To resync every task after renaming entities in bulk (or if the backfill
-migration `0014` logged that it was skipped):
-
-```bash
-python manage.py refresh_task_entity_string [--batch-size 500] [--skip-history]
-```
-
 ## Services
 - Task
   - create
