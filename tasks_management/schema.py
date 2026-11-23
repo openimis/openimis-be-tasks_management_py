@@ -20,6 +20,7 @@ from tasks_management.gql_queries import TaskGroupGQLType, TaskExecutorGQLType, 
     TaskFlowGQLType, TaskDecisionGQLType, TaskAssignmentTargetGQLType
 from tasks_management.models import TaskGroup, TaskExecutor, Task, TaskFlow, TaskDecision
 from tasks_management.apps import TasksManagementConfig, require
+from tasks_management.entity_label import filter_by_entity_label
 from tasks_management.validation import pending_tasks
 
 
@@ -122,13 +123,12 @@ class Query(graphene.ObjectType):
             filters.append(group_tasks_filter(groupId))
 
         # Scoped here, not only by the type hook: the entityString filter below
-        # walks the rows in Python, and must only see the ones the user may.
+        # reads the entity types of these rows, and must only see the ones the user may.
         query = Task.get_queryset(Task.objects.filter(*filters), user)
 
         entity_string = kwargs.get("entityString__Icontains")
         if entity_string:
-            task_ids = [task.id for task in query if entity_string.lower() in str(task.entity).lower()]
-            query = query.filter(id__in=task_ids)
+            query = filter_by_entity_label(query, entity_string)
 
         return gql_optimizer.query(query, info)
 
@@ -156,13 +156,12 @@ class Query(graphene.ObjectType):
             filters.append(group_tasks_filter(groupId))
 
         # Scoped here, not only by the type hook: the entityString filter below
-        # walks the rows in Python, and must only see the ones the user may.
+        # reads the entity types of these rows, and must only see the ones the user may.
         query = Task.get_queryset(Task.history.filter(*filters), user)
 
         entity_string = kwargs.get("entityString__Icontains")
         if entity_string:
-            task_ids = [task.id for task in query if entity_string.lower() in str(task.entity).lower()]
-            query = query.filter(id__in=task_ids)
+            query = filter_by_entity_label(query, entity_string)
 
         return gql_optimizer.query(query, info)
 
